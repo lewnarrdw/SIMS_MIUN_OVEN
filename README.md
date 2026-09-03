@@ -2,6 +2,7 @@
 ## Adam "Cook" Naofi ##
 `Cook forever`  
 `banm`  mmnnd  
-![Idea](Idea.jpg)
+![Idea](Idea.jpg)  
+[GitHub](https://github.com/)
 
 
