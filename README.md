@@ -1,1 +1,2 @@
-# SIMS_MIUN_OVEN
+# SIMS_MIUN_OVEN #
+## Adam "Cook" Naowfi ##
