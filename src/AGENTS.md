@@ -4,6 +4,8 @@
 
 This is a small Python project. Keep `main.py` as the application entry point and place supporting modules directly at the repository root when they are needed, for example `controller.py` or `config.py`. Avoid adding packages or subfolders unless the project genuinely outgrows this flat layout.
 
+Review `TODO.md` when planning related work, and update it when follow-up work is identified or completed so it remains a useful project-level backlog.
+
 Put automated tests in `tests/`; use matching names such as `tests/test_controller.py`. Add `assets/` only for files the application loads at runtime. Keep local settings and secrets in ignored files such as `.env`.
 
 ## Build, Test, and Development Commands
@@ -32,6 +34,8 @@ Add tests for every behavior change. Name tests `test_<behavior>()`; cover norma
 All generated application code must run on 64-bit Raspberry Pi OS on a Raspberry Pi 5 and remain usable on Windows through the simulator. Use ARM/Linux-compatible dependencies and avoid Windows-only APIs, x86-only binaries, and desktop-only paths.
 
 Keep GPIO, I2C, SPI, PWM, and device imports behind a hardware interface selected at runtime. The Windows simulator must never import Pi-only packages; the Pi implementation must provide the same interface. Keep sensor reads, control loops, and blocking I/O off the Qt UI thread. Treat heater output as safety-critical: default to off on startup, stop, errors, and shutdown.
+
+For graph behavior, annotate the maximum measured temperature only after a run completes; keep completion summaries concise and do not show a peak marker during an active or aborted run.
 
 ## Commit & Pull Request Guidelines
 
