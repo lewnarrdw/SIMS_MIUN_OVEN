@@ -1,6 +1,6 @@
 # Oven Controller Simulator
 
-A Windows-runnable PySide6 simulator for the Raspberry Pi 5 oven-controller UI. It is currently simulation-only: no GPIO, sensors, heater, or door switch are connected.
+A Windows-runnable PySide6 interface for the planned Raspberry Pi 5 oven controller. The current application is a UI prototype: it does not connect to GPIO, sensors, a heater, or a door switch, and its process and settings actions are not implemented.
 
 ## Run locally
 
@@ -9,18 +9,17 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-## Current behavior
+## Current interface
 
-- Toolbar actions: Run, Stop, Reset, Export run data, Run events, Export settings, and Import settings. Run CSV files contain versioned measurement and event rows, including PID gain changes. Completed run data prompts to save before it is cleared; stopped runs remain available without a prompt.
-- Live graph: temperature, dashed target temperature, and duty-cycle traces; it scrolls through a 120-second live window, then fits the full run after cool-down.
-- Graph default/range limits: 0-120 seconds on X, 0-65 C for temperature (including overshoot headroom), and 0-100% for heater output.
-- Target temperature: 30-60 C (45 C default); safe cool-down: 25 C; hold duration: 1-120 seconds (60 seconds default).
-- Process stages: Ready, Warming up, Holding, and Cooling down. Completed runs can be exported as CSV before Reset or a new Run clears them; stopped runs remain available for manual export.
-- Door status intentionally reports `Unknown` until the hardware layer exists.
-- PID safeguards: bounded integral state, back-calculation anti-windup, filtered derivative-on-measurement, and a continuous +/-0.1 C hold band.
+- Displays a temperature graph with a dashed goal trace and a separately scaled heater duty-cycle axis. The graph starts with a 0-120 second time range, 0-65 C temperature range, and 0-100% output range.
+- Provides process controls for target temperature (30-60 C, 45 C default) and hold duration (1-120 seconds, 60 seconds default), plus editable PID gains (Kp 0.10, Ki 0.006, Kd 0.05).
+- Shows Ready, Warming up, Holding, and Cooling down stages, along with elapsed time, temperature/output, and door status. Door status currently reads Unknown.
+- Toolbar actions and restore-default buttons are visible, but their callbacks are placeholders. They do not start or stop a run, reset data, or import/export files.
 
-## Handoff for future development
+## Hardware and control status
 
-Keep this project flat: use root-level modules and `tests/` only. Preserve Windows simulation support while adding a Pi-specific hardware implementation behind the same interface; never import Pi-only GPIO packages in the Windows simulator. Keep GPIO/I2C/SPI/PWM work and control loops off the Qt UI thread. Heater output must default to off on startup, Stop, errors, and shutdown.
+`main.py` contains an unfinished background-loop skeleton. Hardware startup is disabled (`HARDWARE_DRIVER_READY = False`); no temperature-reading or heater-output implementation is connected, and the GUI does not yet consume controller state. Keep Pi-only device imports behind a platform-specific hardware interface so the Windows simulator can run without Raspberry Pi packages. Keep blocking device I/O and control work off the Qt UI thread, and ensure heater output defaults to off on startup, stop, errors, and shutdown before enabling hardware operation.
 
-Before changing behavior, inspect `AGENTS.md`, this README, and `TODO.md` for relevant follow-up work; keep the TODO list current as work is identified or completed. State the requested UI or control change, modify the smallest relevant code path, and run `python -m py_compile main.py` (or a syntax-only validation if the workspace cannot write `__pycache__`).
+## Development notes
+
+Keep the project flat, with application modules at the repository root and tests in `tests/`. Install dependencies from `requirements.txt`. Review `TODO.md` for planned follow-up work and keep it current as work is identified or completed.
