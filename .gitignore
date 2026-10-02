@@ -4,3 +4,6 @@
 /src/__pycache__/
 /src/oven-run-20260928-144218.csv
 /to_do.txt
+
+__pycache__/
+*.pyc
