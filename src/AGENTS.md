@@ -40,3 +40,10 @@ For graph behavior, annotate the maximum measured temperature only after a run c
 ## Commit & Pull Request Guidelines
 
 No Git history is available in this root to establish a convention. Use concise, imperative subjects such as `Add temperature controller`, and keep each commit focused. Pull requests should summarize the change, describe validation, link relevant issues, and include screenshots for UI changes.
+## Reliable Editing Workflow
+
+Before editing, confirm the active repository root and whether the target files are writable. If the workspace is read-only, request the required write approval through the supported escalation mechanism; do not assume an approved shell command actually changed a file.
+
+Use focused, context-based patches for source changes. Avoid broad string replacements and shell-escaped multiline edits. After each patch, read the affected code back and inspect `git diff` before making dependent edits. Keep unrelated and untracked user files untouched.
+
+Before reporting a change complete, verify the final source parses (for Python, use a syntax check that does not write cache files when possible), inspect the final diff, and confirm each requested behavior is wired end to end. If a command fails or its output is ambiguous, stop and inspect the files before retrying. Report validation limits accurately.

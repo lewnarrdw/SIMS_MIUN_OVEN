@@ -11,7 +11,7 @@ python main.py
 
 ## Current behavior
 
-- Toolbar actions: Run, Stop, Reset, Export run data, Export settings, and Import settings. Completed run data prompts to save before it is cleared; stopped runs remain available without a prompt.
+- Toolbar actions: Run, Stop, Reset, Export run data, Run events, Export settings, and Import settings. Run CSV files contain versioned measurement and event rows, including PID gain changes. Completed run data prompts to save before it is cleared; stopped runs remain available without a prompt.
 - Live graph: temperature, dashed target temperature, and duty-cycle traces; it scrolls through a 120-second live window, then fits the full run after cool-down.
 - Graph default/range limits: 0-120 seconds on X, 0-65 C for temperature (including overshoot headroom), and 0-100% for heater output.
 - Target temperature: 30-60 C (45 C default); safe cool-down: 25 C; hold duration: 1-120 seconds (60 seconds default).
