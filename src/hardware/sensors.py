@@ -32,7 +32,7 @@ class TemperatureSensor:
         if len(self.buffer) < self.buffer.maxlen:  
             return None
         else:
-            return round(statistics.median(self.buffer), 1)
+            return statistics.median(self.buffer)
 
 
     def seconds_since_valid(self):
