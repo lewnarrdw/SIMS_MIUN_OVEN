@@ -1,7 +1,7 @@
 """Safety rules: decide when the kiln must shut down."""
 
 import config
-
+from hardware.sensors import DoorState
 
 class SafetyMonitor:
     """Checks the kiln's state and reports the first fault it finds."""
@@ -23,7 +23,7 @@ class SafetyMonitor:
         if temperature is not None and temperature >= self.maxTemp:
             return "over_temperature"
         
-        if door_state == "error":
+        if door_state == DoorState.ERROR:
             return "door_error"
 
         return None

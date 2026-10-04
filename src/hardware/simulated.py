@@ -1,6 +1,7 @@
 """Simulated hardware: lets the whole system run without a Raspberry Pi."""
 
 
+import math
 import random
 
 
@@ -35,6 +36,8 @@ class SimulatedHeater:
         self.kiln = kiln
 
     def set_percent(self, percent):
+        if math.isnan(percent):
+            percent = 0
         result = max(0, min(100, percent))
         self.kiln.heater_percent = result
 
@@ -63,6 +66,59 @@ class SimulatedSwitch:
 
     def __init__(self):
         self.is_pressed = False
+
+class SimulatedButton:
+    """A fake push button. Call press() in tests, like a finger would."""
+
+    def __init__(self):
+        self.is_pressed = False
+        self.when_pressed = None     # the code under test assigns a function here
+
+    def press(self):
+        self.is_pressed = True
+        if self.when_pressed is not None:
+            self.when_pressed()      # like gpiozero firing its callback
+
+    def release(self):
+        self.is_pressed = False
+        
+class SimulatedPin:
+    """A fake output pin. Stands in for gpiozero's DigitalOutputDevice."""
+
+    def __init__(self):
+        self.is_on = False
+
+    def on(self):
+        self.is_on = True
+
+    def off(self):
+        self.is_on = False
+
+class SimulatedDoor:
+    """Fake door. Moves when the motor pins say so, presses the limit switches."""
+
+    def __init__(self, in1, in2, open_switch, closed_switch, travel_time=5.0):
+        self.in1 = in1
+        self.in2 = in2
+        self.open_switch = open_switch
+        self.closed_switch = closed_switch
+        self.travel_time = travel_time
+        self.position = 0.0            # 0 = closed, 1 = open
+        self.stuck = False             # set True to simulate a jammed door
+        self._update_switches()
+
+    def update(self, dt):
+        if not self.stuck:
+            if self.in1.is_on and not self.in2.is_on:        # opening
+                self.position += dt / self.travel_time
+            elif self.in2.is_on and not self.in1.is_on:      # closing
+                self.position -= dt / self.travel_time
+            self.position = max(0.0, min(1.0, self.position))
+        self._update_switches()
+
+    def _update_switches(self):
+        self.open_switch.is_pressed = self.position >= 1.0 - 1e-9
+        self.closed_switch.is_pressed = self.position <= 1e-9
 
 if __name__ == "__main__":
     kiln = SimulatedKiln()
