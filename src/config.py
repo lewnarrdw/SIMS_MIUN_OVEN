@@ -66,6 +66,7 @@ FF_PERCENT_PER_DEGREE = 1.0     # holding power per °C above room temperature
 # --- Temperature range ---
 MIN_SETPOINT = 20.0             # lowest target the user can choose
 MAX_SETPOINT = 45.0             # highest target the user can choose
+DOOR_SAFE_TEMPERATURE = 30.0    # TODO: team decides. Door may only open below this (°C)
 
 # --- Safety limits ---
 MAX_TEMPERATURE = 50.0          # FAULT above this 
