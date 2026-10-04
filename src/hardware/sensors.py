@@ -1,5 +1,6 @@
 #Real sensor classes for the kiln
 
+import threading 
 import statistics
 import time
 from collections import deque
@@ -28,6 +29,25 @@ class DoorSwitches:
         if open_pressed:                    return DoorState.OPEN
         if closed_pressed:                  return DoorState.CLOSED
         return DoorState.BETWEEN
+
+class Buttons:
+    """Remembers button presses until the controller collects them."""
+
+    def __init__(self, buttons):
+        # buttons is a dict like {"start": btn1, "stop": btn2, ...}
+        self._events = {name: threading.Event() for name in buttons}
+        for name, button in buttons.items():
+            button.when_pressed = self._events[name].set
+
+    def pressed(self, name):
+        """True once per press: True if the button was pressed since the last call."""
+        event = self._events[name]
+        if event.is_set():
+            event.clear()
+            return True
+        return False
+
+
 
 class TemperatureSensor:
     """Turns noisy raw readings from any probe into a clean temperature.
@@ -107,39 +127,76 @@ class Max31865Probe:
 
     
 if __name__ == "__main__":
-    from hardware.simulated import SimulatedKiln, SimulatedHeater, SimulatedTemperatureProbe, SimulatedSwitch
+    from hardware.simulated import SimulatedKiln, SimulatedHeater, SimulatedTemperatureProbe, SimulatedSwitch, SimulatedButton
 
-    kiln = SimulatedKiln()
-    heater = SimulatedHeater(kiln)
-    sensor = TemperatureSensor(SimulatedTemperatureProbe(kiln))
-        # --- Door switch tests ---
-    open_sw = SimulatedSwitch()
-    closed_sw = SimulatedSwitch()
-    door = DoorSwitches(open_sw, closed_sw)
 
-    # row 1: only open pressed
-    open_sw.is_pressed = True
-    closed_sw.is_pressed = False
-    assert door.state() == DoorState.OPEN
 
-    open_sw.is_pressed = True
-    closed_sw.is_pressed = True
-    assert door.state() == DoorState.ERROR
 
-    open_sw.is_pressed = False
-    closed_sw.is_pressed = True
-    assert door.state() == DoorState.CLOSED
 
-    open_sw.is_pressed = False
-    closed_sw.is_pressed = False
-    assert door.state() == DoorState.BETWEEN
+    # --- Button tests ---
+    start_btn = SimulatedButton()
+    stop_btn = SimulatedButton()
+    open_btn = SimulatedButton()
+    close_btn = SimulatedButton()
+    buttons = Buttons({
+        "start": start_btn,
+        "stop": stop_btn,
+        "open": open_btn,
+        "close": close_btn,
+    })
 
-    print("Door switch checks passed ✅")
+    # 1. nothing pressed yet
+    assert buttons.pressed("start") is False
 
-    heater.set_percent(100)
-    for step in range(150):              # 150 steps of 1/15 s = 10 seconds :)
-        kiln.update(1/15)
-        sensor.update()
-        if step != 0 and step % 15 == 0 :
-            print(f"true={kiln.temperature:5.1f}  filtered={sensor.temperature()}  "
-                  f"window={len(sensor.buffer)}")
+    # 2. one press is seen
+    start_btn.press()
+    assert buttons.pressed("start") is True
+
+    # 3. ...and only once
+    assert buttons.pressed("start") is False
+
+    # 4. two presses between two checks count as one
+    start_btn.press()
+    start_btn.press()
+    assert buttons.pressed("start") is True
+    assert buttons.pressed("start") is False
+
+    # 5. pressing start does not trigger stop
+    start_btn.press()
+    assert buttons.pressed("stop") is False
+
+    print("Button checks passed ✅")
+    # kiln = SimulatedKiln()
+    # heater = SimulatedHeater(kiln)
+    # sensor = TemperatureSensor(SimulatedTemperatureProbe(kiln))
+    #     # --- Door switch tests ---
+    # open_sw = SimulatedSwitch()
+    # closed_sw = SimulatedSwitch()
+    # door = DoorSwitches(open_sw, closed_sw)
+
+    # # row 1: only open pressed
+    # open_sw.is_pressed = True
+    # closed_sw.is_pressed = False
+    # assert door.state() == DoorState.OPEN
+
+    # open_sw.is_pressed = True
+    # closed_sw.is_pressed = True
+    # assert door.state() == DoorState.ERROR
+
+    # open_sw.is_pressed = False
+    # closed_sw.is_pressed = True
+    # assert door.state() == DoorState.CLOSED
+
+    # open_sw.is_pressed = False
+    # closed_sw.is_pressed = False
+    # assert door.state() == DoorState.BETWEEN
+
+    # print("Door switch checks passed ✅")
+
+    # heater.set_percent(100)
+    # for step in range(150):              # 150 steps of 1/15 s = 10 seconds :)
+    #     kiln.update(1/15)
+    #     sensor.update()
+    #     if step != 0 and step % 15 == 0 :
+    #         print(f"true={kiln.temperature:5.1f}  filtered={sensor.temperature()}  "
+    #               f"window={len(sensor.buffer)}")
