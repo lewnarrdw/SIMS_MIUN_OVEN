@@ -58,7 +58,11 @@ class SimulatedTemperatureProbe:
             value += random.choice([15, -15])
         return value
 
+class SimulatedSwitch:
+    """A fake limit switch. Set is_pressed by hand in tests."""
 
+    def __init__(self):
+        self.is_pressed = False
 
 if __name__ == "__main__":
     kiln = SimulatedKiln()

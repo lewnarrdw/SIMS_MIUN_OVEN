@@ -3,7 +3,31 @@
 import statistics
 import time
 from collections import deque
+from enum import Enum
 
+
+class DoorState(Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+    BETWEEN = "between"
+    ERROR = "error"
+
+class DoorSwitches:
+    """Reports the door position from two limit switches."""
+
+    def __init__(self, open_switch, closed_switch):
+        self.upSensor = open_switch
+        self.downSensor = closed_switch
+
+    def state(self):
+        """Return a DoorState."""
+        open_pressed = self.upSensor.is_pressed
+        closed_pressed = self.downSensor.is_pressed
+
+        if open_pressed and closed_pressed: return DoorState.ERROR
+        if open_pressed:                    return DoorState.OPEN
+        if closed_pressed:                  return DoorState.CLOSED
+        return DoorState.BETWEEN
 
 class TemperatureSensor:
     """Turns noisy raw readings from any probe into a clean temperature.
@@ -83,11 +107,34 @@ class Max31865Probe:
 
     
 if __name__ == "__main__":
-    from hardware.simulated import SimulatedKiln, SimulatedHeater, SimulatedTemperatureProbe
+    from hardware.simulated import SimulatedKiln, SimulatedHeater, SimulatedTemperatureProbe, SimulatedSwitch
 
     kiln = SimulatedKiln()
     heater = SimulatedHeater(kiln)
     sensor = TemperatureSensor(SimulatedTemperatureProbe(kiln))
+        # --- Door switch tests ---
+    open_sw = SimulatedSwitch()
+    closed_sw = SimulatedSwitch()
+    door = DoorSwitches(open_sw, closed_sw)
+
+    # row 1: only open pressed
+    open_sw.is_pressed = True
+    closed_sw.is_pressed = False
+    assert door.state() == DoorState.OPEN
+
+    open_sw.is_pressed = True
+    closed_sw.is_pressed = True
+    assert door.state() == DoorState.ERROR
+
+    open_sw.is_pressed = False
+    closed_sw.is_pressed = True
+    assert door.state() == DoorState.CLOSED
+
+    open_sw.is_pressed = False
+    closed_sw.is_pressed = False
+    assert door.state() == DoorState.BETWEEN
+
+    print("Door switch checks passed ✅")
 
     heater.set_percent(100)
     for step in range(150):              # 150 steps of 1/15 s = 10 seconds :)
