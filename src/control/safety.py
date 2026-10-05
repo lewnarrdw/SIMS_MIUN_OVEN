@@ -23,7 +23,7 @@ class SafetyMonitor:
 
 
 
-    def check(self, temperature, seconds_since_valid, door_state, motor_fault):
+    def check(self, temperature, seconds_since_valid, door_state, motor_fault, door_must_be_closed):
         """Return None if everything is safe, otherwise a short fault name."""
 
         if self.sensorTimeout <= seconds_since_valid:
@@ -37,6 +37,9 @@ class SafetyMonitor:
         
         if door_state == DoorState.ERROR:
             return "door_error"
+
+        if door_must_be_closed and door_state != DoorState.CLOSED:
+            return "door_opened"
         
         if motor_fault is not None:
             return "door_motor_" + motor_fault
@@ -57,22 +60,22 @@ if __name__ == "__main__":
     safety = SafetyMonitor()
 
     # --- normal cases ---
-    assert safety.check(30.0, 0.1, DoorState.CLOSED, None) is None
-    assert safety.check(51.0, 0.1, DoorState.CLOSED, None) == "over_temperature"
-    assert safety.check(None, 3.0, DoorState.CLOSED, None) == "sensor_timeout"
-    assert safety.check(30.0, 0.1, DoorState.ERROR, None) == "door_error"
-    assert safety.check(51.0, 3.0, DoorState.ERROR, None) == "sensor_timeout"   # order check
+    assert safety.check(30.0, 0.1, DoorState.CLOSED, None, False) is None
+    assert safety.check(51.0, 0.1, DoorState.CLOSED, None, False) == "over_temperature"
+    assert safety.check(None, 3.0, DoorState.CLOSED, None, False) == "sensor_timeout"
+    assert safety.check(30.0, 0.1, DoorState.ERROR, None, False) == "door_error"
+    assert safety.check(51.0, 3.0, DoorState.ERROR, None, False) == "sensor_timeout"   # order check
 
     # --- boundaries: reaching a limit is a fault ---
-    assert safety.check(49.9, 0.1, DoorState.CLOSED, None) is None
-    assert safety.check(50.0, 0.1, DoorState.CLOSED, None) == "over_temperature"
-    assert safety.check(30.0, 1.99, DoorState.CLOSED, None) is None
-    assert safety.check(30.0, 2.0, DoorState.CLOSED, None) == "sensor_timeout"
+    assert safety.check(49.9, 0.1, DoorState.CLOSED, None, False) is None
+    assert safety.check(50.0, 0.1, DoorState.CLOSED, None, False) == "over_temperature"
+    assert safety.check(30.0, 1.99, DoorState.CLOSED, None, False) is None
+    assert safety.check(30.0, 2.0, DoorState.CLOSED, None, False) == "sensor_timeout"
 
     # --- startup and bad readings ---
-    assert safety.check(None, 0.1, DoorState.CLOSED, None) is None              # buffer still filling
-    assert safety.check(None, float("inf"), DoorState.CLOSED, None) == "sensor_timeout"
-    assert safety.check(float("nan"), 0.1, DoorState.CLOSED, None) == "sensor_invalid"
+    assert safety.check(None, 0.1, DoorState.CLOSED, None, False) is None              # buffer still filling
+    assert safety.check(None, float("inf"), DoorState.CLOSED, None, False) == "sensor_timeout"
+    assert safety.check(float("nan"), 0.1, DoorState.CLOSED, None, False) == "sensor_invalid"
 
     # --- door may open? ---
     assert safety.door_may_open(25.0) is True
@@ -83,9 +86,17 @@ if __name__ == "__main__":
     assert safety.door_may_open(float("nan")) is False
     
     # --- new check
-    assert safety.check(30.0, 0.1, DoorState.CLOSED, "timeout") == "door_motor_timeout"
-    assert safety.check(51.0, 0.1, DoorState.CLOSED, "timeout") == "over_temperature"   # order
+    assert safety.check(30.0, 0.1, DoorState.CLOSED, "timeout", False) == "door_motor_timeout"
+    assert safety.check(51.0, 0.1, DoorState.CLOSED, "timeout", False) == "over_temperature"   # order
 
+    # --- door must be closed (heating / holding) ---
+    assert safety.check(30.0, 0.1, DoorState.CLOSED, None, True) is None
+    assert safety.check(30.0, 0.1, DoorState.BETWEEN, None, True) == "door_opened"
+    assert safety.check(30.0, 0.1, DoorState.OPEN, None, True) == "door_opened"
+    assert safety.check(30.0, 0.1, DoorState.OPEN, None, False) is None      # fine when not required
+    assert safety.check(30.0, 0.1, DoorState.ERROR, None, True) == "door_error"
+    assert safety.check(51.0, 0.1, DoorState.OPEN, None, True) == "over_temperature"   # order
+    
     # --- setpoints ---
     safety.validate_setpoint(20.0)
     safety.validate_setpoint(40.0)

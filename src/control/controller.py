@@ -1263,3 +1263,4 @@ if __name__ == "__main__":
     assert r.heater.locked is True
 
     print("Controller faster-Stop checks passed ✅")
+    
