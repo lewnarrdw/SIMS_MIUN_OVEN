@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 
 import pyqtgraph as pg
@@ -129,18 +130,66 @@ class OvenWindow(QtWidgets.QMainWindow):
         toolbar = self.addToolBar("Process")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        for label, callback in (
-            ("Run", self.start_process),
-            ("Stop", self.stop_process),
-            ("Reset", self.reset_process),
-            ("Import", self.import_settings),
-            ("Export run", self.export_run_data),
-            ("Run events...", self.show_run_events),
-            ("Export settings", self.export_settings),
-        ):
+        toolbar.setIconSize(QtCore.QSize(22, 22))
+        action_specs = (
+            ("Run", self.start_process, "run", "#4caf70"),
+            ("Stop", self.stop_process, "stop", "#d45b52"),
+            ("Reset", self.reset_process, "reset", "#d99a2b"),
+            ("Import", self.import_settings, "import", "#63a8e8"),
+            ("Export run", self.export_run_data, "export", "#63a8e8"),
+            ("Run events...", self.show_run_events, "events", "#63a8e8"),
+            ("Export settings", self.export_settings, "settings", "#63a8e8"),
+        )
+        for label, callback, icon_name, accent in action_specs:
             action = QtGui.QAction(label, self)
+            action.setIcon(self._toolbar_icon(icon_name, accent))
+            action.setToolTip(label)
             action.triggered.connect(callback)
             toolbar.addAction(action)
+
+    @staticmethod
+    def _toolbar_icon(symbol: str, accent: str) -> QtGui.QIcon:
+        pixmap = QtGui.QPixmap(24, 24)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtGui.QPen(QtGui.QColor(accent), 2))
+        painter.setBrush(QtGui.QColor(accent))
+        if symbol == "run":
+            painter.drawPolygon(QtGui.QPolygonF((QtCore.QPointF(7, 5), QtCore.QPointF(19, 12), QtCore.QPointF(7, 19))))
+        elif symbol == "stop":
+            painter.drawRoundedRect(QtCore.QRectF(6, 6, 12, 12), 2, 2)
+        elif symbol == "reset":
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawArc(QtCore.QRectF(5, 5, 14, 14), 45 * 16, 280 * 16)
+            painter.drawLine(QtCore.QPointF(5, 7), QtCore.QPointF(5, 13))
+            painter.drawLine(QtCore.QPointF(5, 7), QtCore.QPointF(11, 7))
+        elif symbol in ("import", "export"):
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QtCore.QRectF(5, 10, 14, 10), 2, 2)
+            arrow_top = symbol == "import"
+            painter.drawLine(QtCore.QPointF(12, 4 if arrow_top else 10), QtCore.QPointF(12, 15 if arrow_top else 20))
+            if arrow_top:
+                painter.drawLine(QtCore.QPointF(8, 11), QtCore.QPointF(12, 15))
+                painter.drawLine(QtCore.QPointF(16, 11), QtCore.QPointF(12, 15))
+            else:
+                painter.drawLine(QtCore.QPointF(8, 13), QtCore.QPointF(12, 9))
+                painter.drawLine(QtCore.QPointF(16, 13), QtCore.QPointF(12, 9))
+        elif symbol == "events":
+            for y in (6, 12, 18):
+                painter.drawEllipse(QtCore.QPointF(6, y), 1, 1)
+                painter.drawLine(QtCore.QPointF(10, y), QtCore.QPointF(19, y))
+        else:
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QtCore.QRectF(5, 5, 14, 14), 2, 2)
+            painter.drawEllipse(QtCore.QPointF(12, 12), 3, 3)
+            for angle in range(0, 360, 60):
+                radians = math.radians(angle)
+                inner = QtCore.QPointF(12 + 7 * math.cos(radians), 12 + 7 * math.sin(radians))
+                outer = QtCore.QPointF(12 + 10 * math.cos(radians), 12 + 10 * math.sin(radians))
+                painter.drawLine(inner, outer)
+        painter.end()
+        return QtGui.QIcon(pixmap)
 
     def _build_layout(self) -> None:
         central = QtWidgets.QWidget()
@@ -150,11 +199,13 @@ class OvenWindow(QtWidgets.QMainWindow):
         layout.setSpacing(12)
 
         self.graph = pg.PlotWidget()
+        self.graph.setMinimumWidth(560)
+        self.graph.setMinimumHeight(300)
         self.graph.setBackground("#20252b")
         self.graph.showGrid(x=True, y=True, alpha=0.32)
         self.graph.setLabel("left", "Temperature (C)", **{"color": "#f4f7fa", "font-size": "16pt", "font-weight": "bold"})
         self.graph.setLabel("bottom", "Elapsed time (s)", **{"color": "#f4f7fa", "font-size": "16pt", "font-weight": "bold"})
-        self.legend = self.graph.addLegend(offset=(12, 12))
+        self.legend = self.graph.addLegend(offset=(12, 12), labelTextColor="#f4f7fa", labelTextSize="12pt")
         self.legend.setBrush(pg.mkBrush("#2a3139"))
         self.legend.setPen(pg.mkPen("#71808d"))
         self.graph_item = self.graph.getPlotItem()
