@@ -40,7 +40,7 @@ BUTTON_STOP_PIN = 13
 BUTTON_OPEN_PIN = 16
 BUTTON_CLOSE_PIN = 25
 ESTOP_SENSE_PIN = 4             # TODO: depends on EE's E-stop design
-
+ESTOP_NORMALLY_CLOSED = True    # TODO: confirm with the EE team (NC contact, pull-up wiring)
 
 # --- Stability (target reached) ---
 STABLE_TOLERANCE = 0.1          # °C: must stay within ± this of the setpoint

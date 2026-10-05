@@ -81,6 +81,8 @@ class SimulatedButton:
 
     def release(self):
         self.is_pressed = False
+        if self.when_released is not None:
+            self.when_released()
         
 class SimulatedPin:
     """A fake output pin. Stands in for gpiozero's DigitalOutputDevice."""
