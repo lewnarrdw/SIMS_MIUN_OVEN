@@ -36,8 +36,23 @@ class Buttons:
     def __init__(self, buttons):
         # buttons is a dict like {"start": btn1, "stop": btn2, ...}
         self._events = {name: threading.Event() for name in buttons}
+        self._actions = {}
         for name, button in buttons.items():
-            button.when_pressed = self._events[name].set
+            button.when_pressed = self._make_callback(name)
+
+    def _make_callback(self, name):
+        def callback():
+            try:
+                action = self._actions.get(name)
+                if action is not None:
+                    action()
+            finally:
+                self._events[name].set()
+        return callback
+
+    def on_press(self, name, action):
+        """Run action immediately (in the button's own thread) every time this button is pressed."""
+        self._actions[name] = action
 
     def pressed(self, name):
         """True once per press: True if the button was pressed since the last call."""
@@ -47,6 +62,28 @@ class Buttons:
             return True
         return False
 
+
+class EmergencyStop:
+    """Reads the emergency stop. With a normally-closed (NC) contact, a pressed
+    button OR a broken wire both count as an emergency."""
+
+    def __init__(self, switch, normally_closed=True):
+        self.switch = switch
+        self.normally_closed = normally_closed
+
+    def is_active(self):
+        """True when the emergency stop is pressed (or the wire is broken)."""
+        pressed = self.switch.is_pressed
+        if self.normally_closed:
+            return not pressed
+        return pressed
+
+    def on_trigger(self, action):
+        """Run action immediately (in the switch's own thread) when the E-stop triggers."""
+        if self.normally_closed:
+            self.switch.when_released = action
+        else:
+            self.switch.when_pressed = action
 
 
 class TemperatureSensor:
@@ -166,32 +203,83 @@ if __name__ == "__main__":
     assert buttons.pressed("stop") is False
 
     print("Button checks passed ✅")
-    # kiln = SimulatedKiln()
-    # heater = SimulatedHeater(kiln)
-    # sensor = TemperatureSensor(SimulatedTemperatureProbe(kiln))
-    #     # --- Door switch tests ---
-    # open_sw = SimulatedSwitch()
-    # closed_sw = SimulatedSwitch()
-    # door = DoorSwitches(open_sw, closed_sw)
+    kiln = SimulatedKiln()
+    heater = SimulatedHeater(kiln)
+    sensor = TemperatureSensor(SimulatedTemperatureProbe(kiln))
+        # --- Door switch tests ---
+    open_sw = SimulatedSwitch()
+    closed_sw = SimulatedSwitch()
+    door = DoorSwitches(open_sw, closed_sw)
 
-    # # row 1: only open pressed
-    # open_sw.is_pressed = True
-    # closed_sw.is_pressed = False
-    # assert door.state() == DoorState.OPEN
+    # row 1: only open pressed
+    open_sw.is_pressed = True
+    closed_sw.is_pressed = False
+    assert door.state() == DoorState.OPEN
 
-    # open_sw.is_pressed = True
-    # closed_sw.is_pressed = True
-    # assert door.state() == DoorState.ERROR
+    open_sw.is_pressed = True
+    closed_sw.is_pressed = True
+    assert door.state() == DoorState.ERROR
 
-    # open_sw.is_pressed = False
-    # closed_sw.is_pressed = True
-    # assert door.state() == DoorState.CLOSED
+    open_sw.is_pressed = False
+    closed_sw.is_pressed = True
+    assert door.state() == DoorState.CLOSED
 
-    # open_sw.is_pressed = False
-    # closed_sw.is_pressed = False
-    # assert door.state() == DoorState.BETWEEN
+    open_sw.is_pressed = False
+    closed_sw.is_pressed = False
+    assert door.state() == DoorState.BETWEEN
 
-    # print("Door switch checks passed ✅")
+    print("Door switch checks passed ✅")
+        # --- Emergency stop tests ---
+    sw = SimulatedSwitch()
+    nc = EmergencyStop(sw)                          # normally closed (the default)
+    sw.is_pressed = True                            # contact closed: all fine
+    assert nc.is_active() is False
+    sw.is_pressed = False                           # contact open: pressed, or the wire is broken
+    assert nc.is_active() is True
+    no = EmergencyStop(sw, normally_closed=False)
+    sw.is_pressed = False
+    assert no.is_active() is False
+    sw.is_pressed = True
+    assert no.is_active() is True
+    print("Emergency stop checks passed ✅")
+
+
+    # --- immediate action on a button ---
+    calls = []
+    b = SimulatedButton()
+    bs = Buttons({"stop": b})
+    bs.on_press("stop", lambda: calls.append("cut"))
+    b.press()
+    assert calls == ["cut"]                   # the action ran at once
+    assert bs.pressed("stop") is True         # and the press is still recorded
+    assert bs.pressed("stop") is False
+
+    def broken():
+        raise RuntimeError("boom")
+    bs.on_press("stop", broken)
+    try:
+        b.press()
+    except RuntimeError:
+        pass
+    assert bs.pressed("stop") is True         # a crashing action must not lose the press
+
+    # --- immediate action on the E-stop ---
+    calls = []
+    eb = SimulatedButton()
+    eb.is_pressed = True                      # NC contact closed = healthy
+    nc = EmergencyStop(eb)
+    nc.on_trigger(lambda: calls.append("cut"))
+    eb.release()                              # the NC contact opens
+    assert calls == ["cut"]
+    assert nc.is_active() is True
+
+    calls = []
+    eb2 = SimulatedButton()
+    no = EmergencyStop(eb2, normally_closed=False)
+    no.on_trigger(lambda: calls.append("cut"))
+    eb2.press()
+    assert calls == ["cut"]
+    print("Immediate-action checks passed ✅")
 
     # heater.set_percent(100)
     # for step in range(150):              # 150 steps of 1/15 s = 10 seconds :)

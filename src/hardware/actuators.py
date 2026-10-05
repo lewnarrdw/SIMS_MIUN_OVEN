@@ -13,15 +13,21 @@ class Heater:
         self.pin = pin
         self.window = window
         self.percent = 0.0
+        self.locked = False
 
     def set_percent(self, percent):
-        """Set the requested power, 0-100."""
+        """Set the requested power, 0-100. Ignored while the heater is locked."""
+        if self.locked:
+            return
         if math.isnan(percent):
             percent = 0
         self.percent = max(0, min(100, percent))
 
     def update(self, now):
         """Call often. Switches the pin according to where we are in the window."""
+        if self.locked:
+            self.pin.off()
+            return
         position = now % self.window
         on_time = self.percent / 100 * self.window
         if position < on_time:
@@ -33,6 +39,16 @@ class Heater:
         """Emergency stop for the heater: pin off right now, power request to 0."""
         self.percent = 0
         self.pin.off()
+
+    def emergency_off(self):
+        """Cut the heater and keep it off until unlock() is called."""
+        self.locked = True
+        self.percent = 0
+        self.pin.off()
+
+    def unlock(self):
+        """Allow the heater to be switched on again (after a reset)."""
+        self.locked = False
 
 class MotorState(Enum):
     IDLE = "idle"
@@ -261,3 +277,21 @@ if __name__ == "__main__":
     assert not r.in1.is_on
 
     print("Door motor checks passed ✅")
+        # --- emergency_off / unlock ---
+    pin2 = SimulatedPin()
+    h2 = Heater(pin2)
+    h2.set_percent(100)
+    h2.update(0.0)
+    assert pin2.is_on is True
+    h2.emergency_off()
+    assert pin2.is_on is False and h2.percent == 0
+    h2.set_percent(100)                      # ignored while locked
+    assert h2.percent == 0
+    h2.percent = 80                          # even if a value sneaks in...
+    h2.update(0.0)
+    assert pin2.is_on is False               # ...the pin stays off
+    h2.unlock()
+    h2.set_percent(100)
+    h2.update(0.0)
+    assert pin2.is_on is True
+    print("Heater lockout checks passed ✅")
