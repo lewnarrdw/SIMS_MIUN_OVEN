@@ -131,6 +131,11 @@ class OvenWindow(QtWidgets.QMainWindow):
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toolbar.setIconSize(QtCore.QSize(22, 22))
+        toolbar.setStyleSheet(
+            "QToolButton { border: 1px solid transparent; border-radius: 5px; padding: 6px 9px; }"
+            "QToolButton:hover { background-color: #343b42; border-color: #78838d; }"
+            "QToolButton:pressed { background-color: #3d464e; border-color: #8a949d; }"
+        )
         action_specs = (
             ("Run", self.start_process, "run", "#4caf70"),
             ("Stop", self.stop_process, "stop", "#d45b52"),
@@ -259,6 +264,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.duty_view.setXLink(self.graph_item)
         self.graph_item.vb.sigResized.connect(self._resize_duty_view)
         self.temperature_curve = self.graph.plot(name="Temperature", pen=pg.mkPen("#ff7566", width=3))
+        self.temperature_marker_items: list[pg.GraphicsObject] = []
         self.goal_curve = self.graph.plot(name="Goal", pen=pg.mkPen((255, 209, 102, 160), width=3, style=QtCore.Qt.PenStyle.DashLine))
         self.duty_curve = pg.PlotCurveItem(pen=pg.mkPen("#63a8e8", width=3))
         self.duty_view.addItem(self.duty_curve)
@@ -277,8 +283,14 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.kd_input = self._spin(0.0, 10.0, DEFAULT_KD, decimals=2, step=0.01)
         self.hold_input = self._spin(1.0, MAX_DURATION_S, DEFAULT_HOLD_DURATION_S, " s", decimals=0)
         self.restore_pid_button = QtWidgets.QPushButton("Restore defaults")
+        self.restore_pid_button.setStyleSheet(
+            "QPushButton { border: 1px solid #59636d; border-radius: 4px; padding: 5px 8px; }"
+            "QPushButton:hover { background-color: #343b42; border-color: #78838d; }"
+            "QPushButton:pressed { background-color: #3d464e; border-color: #8a949d; }"
+        )
         self.restore_pid_button.clicked.connect(self.restore_pid_defaults)
         self.restore_process_button = QtWidgets.QPushButton("Restore defaults")
+        self.restore_process_button.setStyleSheet(self.restore_pid_button.styleSheet())
         self.restore_process_button.clicked.connect(self.restore_process_defaults)
         controls.addRow(QtWidgets.QLabel("<b>Process</b>"))
         controls.addRow("Target", self.target_input)
@@ -320,11 +332,105 @@ class OvenWindow(QtWidgets.QMainWindow):
         control.setSuffix(suffix)
         return control
 
+    def _clear_temperature_markers(self) -> None:
+        """Remove annotations from the previous run."""
+        for item in self.temperature_marker_items:
+            self.graph.removeItem(item)
+        self.temperature_marker_items.clear()
+
+    def _add_temperature_marker(
+        self,
+        elapsed_s: float,
+        temperature_c: float,
+        label: str,
+        color: str,
+    ) -> None:
+        """Draw a point and label on the temperature axis."""
+        marker = pg.ScatterPlotItem(
+            [elapsed_s],
+            [temperature_c],
+            symbol="o",
+            size=12,
+            pen=pg.mkPen(color, width=1.5),
+            brush=pg.mkBrush(color),
+        )
+        annotation = pg.TextItem(
+            label,
+            color="#fff1a8",
+            anchor=(0.0, 1.0),
+            fill=pg.mkBrush("#20252b"),
+            border=pg.mkPen(color),
+        )
+        annotation.setPos(elapsed_s, temperature_c)
+        self.graph.addItem(marker)
+        self.graph.addItem(annotation)
+        self.temperature_marker_items.extend((marker, annotation))
+
+    def show_peak_temperature_marker(
+        self,
+        peak_elapsed_s: float,
+        peak_temperature_c: float,
+        target_temperature_c: float,
+    ) -> None:
+        """Annotate the maximum temperature after a run completes."""
+        minutes, seconds = divmod(peak_elapsed_s, 60.0)
+        difference_c = peak_temperature_c - target_temperature_c
+        label = (
+            f"Peak {peak_temperature_c:.2f} °C at "
+            f"{int(minutes):02d}:{seconds:04.1f} "
+            f"({difference_c:+.2f} °C vs target)"
+        )
+        self._add_temperature_marker(peak_elapsed_s, peak_temperature_c, label, "#ffe680")
+
+    def show_hold_minimum_temperature_marker(
+        self,
+        minimum_elapsed_s: float,
+        minimum_temperature_c: float,
+    ) -> None:
+        """Annotate the lowest hold temperature once the hold stage ends.
+
+        Pass the time when that minimum was measured so the marker sits on
+        the corresponding point in the temperature curve.
+        """
+        minutes, seconds = divmod(minimum_elapsed_s, 60.0)
+        label = (
+            f"Hold low {minimum_temperature_c:.2f} °C at "
+            f"{int(minutes):02d}:{seconds:04.1f}"
+        )
+        self._add_temperature_marker(
+            minimum_elapsed_s,
+            minimum_temperature_c,
+            label,
+            "#8fc5f5",
+        )
+
+    def _on_hold_completed(
+        self,
+        minimum_elapsed_s: float,
+        minimum_temperature_c: float,
+    ) -> None:
+        """Hold-end marker call site for the future run-data integration."""
+        # self.show_hold_minimum_temperature_marker(
+        #     minimum_elapsed_s, minimum_temperature_c
+        # )
+        pass
+
+    def _on_process_completed(
+        self,
+        peak_elapsed_s: float,
+        peak_temperature_c: float,
+    ) -> None:
+        """Peak marker call site for a successfully completed run."""
+        # self.show_peak_temperature_marker(
+        #     peak_elapsed_s, peak_temperature_c, self.target_input.value()
+        # )
+        pass
+
     def _resize_duty_view(self) -> None:
         self.duty_view.setGeometry(self.graph_item.vb.sceneBoundingRect())
 
     def start_process(self) -> None:
-        pass
+        self._clear_temperature_markers()
 
     def stop_process(self) -> None:
         pass
