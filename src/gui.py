@@ -31,7 +31,7 @@ class StageProgress(QtWidgets.QWidget):
         self.fraction = 0.0
         self.progress_detail = ""
         self.setMinimumWidth(180)
-        self.setMinimumHeight(290)
+        self.setMinimumHeight(200)
 
     def set_progress(self, current_stage: int, fraction: float = 0.0, detail: str = "") -> None:
         self.current_stage = current_stage
@@ -122,9 +122,9 @@ class OvenWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Oven Controller")
-        self.resize(1280, 760)
         self._build_toolbar()
         self._build_layout()
+        self.resize(1280, 760)
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Process")
@@ -135,15 +135,23 @@ class OvenWindow(QtWidgets.QMainWindow):
             ("Run", self.start_process, "run", "#4caf70"),
             ("Stop", self.stop_process, "stop", "#d45b52"),
             ("Reset", self.reset_process, "reset", "#d99a2b"),
+            (None, None, None, None),
             ("Import", self.import_settings, "import", "#63a8e8"),
-            ("Export run", self.export_run_data, "export", "#63a8e8"),
-            ("Run events...", self.show_run_events, "events", "#63a8e8"),
-            ("Export settings", self.export_settings, "settings", "#63a8e8"),
+            ("Export", self.export_run_data, "export", "#63a8e8"),
+            ("Event log", self.show_run_events, "events", "#63a8e8"),
         )
         for label, callback, icon_name, accent in action_specs:
+            if label is None:
+                toolbar.addSeparator()
+                continue
             action = QtGui.QAction(label, self)
             action.setIcon(self._toolbar_icon(icon_name, accent))
-            action.setToolTip(label)
+            action.setToolTip({
+                "Import": "Import process settings",
+                "Export": "Export run data",
+                "Event log": "View events from this run",
+            }.get(label, label))
+            action.setStatusTip(action.toolTip())
             action.triggered.connect(callback)
             toolbar.addAction(action)
 
@@ -153,41 +161,57 @@ class OvenWindow(QtWidgets.QMainWindow):
         pixmap.fill(QtCore.Qt.GlobalColor.transparent)
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        painter.setPen(QtGui.QPen(QtGui.QColor(accent), 2))
-        painter.setBrush(QtGui.QColor(accent))
+        pen = QtGui.QPen(QtGui.QColor(accent), 2.0)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+
         if symbol == "run":
+            painter.setBrush(QtGui.QColor(accent))
             painter.drawPolygon(QtGui.QPolygonF((QtCore.QPointF(7, 5), QtCore.QPointF(19, 12), QtCore.QPointF(7, 19))))
         elif symbol == "stop":
+            painter.setBrush(QtGui.QColor(accent))
             painter.drawRoundedRect(QtCore.QRectF(6, 6, 12, 12), 2, 2)
         elif symbol == "reset":
-            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            painter.drawArc(QtCore.QRectF(5, 5, 14, 14), 45 * 16, 280 * 16)
-            painter.drawLine(QtCore.QPointF(5, 7), QtCore.QPointF(5, 13))
-            painter.drawLine(QtCore.QPointF(5, 7), QtCore.QPointF(11, 7))
+            # Familiar reset glyph: an open counterclockwise loop with an arrowhead.
+            arc = QtGui.QPainterPath(QtCore.QPointF(7, 6))
+            arc.cubicTo(QtCore.QPointF(9, 4.5), QtCore.QPointF(11, 4), QtCore.QPointF(12, 4))
+            arc.cubicTo(QtCore.QPointF(16.5, 4), QtCore.QPointF(20, 7.5), QtCore.QPointF(20, 12))
+            arc.cubicTo(QtCore.QPointF(20, 16.5), QtCore.QPointF(16.5, 20), QtCore.QPointF(12, 20))
+            arc.cubicTo(QtCore.QPointF(7.5, 20), QtCore.QPointF(4, 16.5), QtCore.QPointF(4, 12))
+            painter.drawPath(arc)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(accent))
+            painter.drawPolygon(QtGui.QPolygonF((
+                QtCore.QPointF(4, 4), QtCore.QPointF(4, 11), QtCore.QPointF(10, 7),
+            )))
         elif symbol in ("import", "export"):
-            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QtCore.QRectF(5, 10, 14, 10), 2, 2)
-            arrow_top = symbol == "import"
-            painter.drawLine(QtCore.QPointF(12, 4 if arrow_top else 10), QtCore.QPointF(12, 15 if arrow_top else 20))
-            if arrow_top:
-                painter.drawLine(QtCore.QPointF(8, 11), QtCore.QPointF(12, 15))
-                painter.drawLine(QtCore.QPointF(16, 11), QtCore.QPointF(12, 15))
+            # A tray makes the direction of the transfer unambiguous.
+            tray = QtGui.QPainterPath(QtCore.QPointF(5, 14))
+            tray.lineTo(5, 19)
+            tray.quadTo(5, 20, 6, 20)
+            tray.lineTo(18, 20)
+            tray.quadTo(19, 20, 19, 19)
+            tray.lineTo(19, 14)
+            painter.drawPath(tray)
+            if symbol == "import":
+                painter.drawLine(QtCore.QPointF(12, 4), QtCore.QPointF(12, 15))
+                painter.drawLine(QtCore.QPointF(8.5, 11.5), QtCore.QPointF(12, 15))
+                painter.drawLine(QtCore.QPointF(15.5, 11.5), QtCore.QPointF(12, 15))
             else:
-                painter.drawLine(QtCore.QPointF(8, 13), QtCore.QPointF(12, 9))
-                painter.drawLine(QtCore.QPointF(16, 13), QtCore.QPointF(12, 9))
+                painter.drawLine(QtCore.QPointF(12, 16), QtCore.QPointF(12, 5))
+                painter.drawLine(QtCore.QPointF(8.5, 8.5), QtCore.QPointF(12, 5))
+                painter.drawLine(QtCore.QPointF(15.5, 8.5), QtCore.QPointF(12, 5))
         elif symbol == "events":
-            for y in (6, 12, 18):
-                painter.drawEllipse(QtCore.QPointF(6, y), 1, 1)
-                painter.drawLine(QtCore.QPointF(10, y), QtCore.QPointF(19, y))
-        else:
-            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QtCore.QRectF(5, 5, 14, 14), 2, 2)
-            painter.drawEllipse(QtCore.QPointF(12, 12), 3, 3)
-            for angle in range(0, 360, 60):
-                radians = math.radians(angle)
-                inner = QtCore.QPointF(12 + 7 * math.cos(radians), 12 + 7 * math.sin(radians))
-                outer = QtCore.QPointF(12 + 10 * math.cos(radians), 12 + 10 * math.sin(radians))
-                painter.drawLine(inner, outer)
+            # Clipboard style event list with clearly separated, aligned entries.
+            panel = QtCore.QRectF(4.5, 4, 15, 17)
+            painter.drawRoundedRect(panel, 2, 2)
+            painter.drawRoundedRect(QtCore.QRectF(9, 2.5, 6, 3.5), 1.2, 1.2)
+            for y in (9, 13, 17):
+                painter.drawEllipse(QtCore.QPointF(8, y), 0.85, 0.85)
+                painter.drawLine(QtCore.QPointF(11, y), QtCore.QPointF(16.5, y))
+
         painter.end()
         return QtGui.QIcon(pixmap)
 
@@ -222,6 +246,8 @@ class OvenWindow(QtWidgets.QMainWindow):
         right_axis.setPen(pg.mkPen("#63a8e8"))
         right_axis.setTextPen(pg.mkPen("#63a8e8"))
         right_axis.setStyle(tickFont=axis_font, tickTextOffset=8)
+        self.graph_item.getAxis('left').setWidth(72)
+        right_axis.setWidth(72)
         self.graph_item.vb.setLimits(xMin=0, xMax=GRAPH_WINDOW_S, minXRange=5, maxXRange=GRAPH_WINDOW_S, yMin=0, yMax=MAX_TEMPERATURE_DISPLAY_C, minYRange=5, maxYRange=MAX_TEMPERATURE_DISPLAY_C)
         self.graph_item.setXRange(0, GRAPH_WINDOW_S, padding=0)
         self.graph_item.setYRange(0, MAX_TEMPERATURE_DISPLAY_C, padding=0)
