@@ -1,12 +1,14 @@
 ﻿"""Qt-safe application service and bounded-latency hardware worker."""
 from __future__ import annotations
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from queue import Empty, SimpleQueue
 import threading
 import time
 
 from control.controller import Controller, State
 from hardware.factory import create_hardware
+from data_manager import DataManager
 
 @dataclass(frozen=True, slots=True)
 class ViewState:
@@ -25,18 +27,38 @@ class ViewState:
     hold_min_time_s: float | None
     hold_min_c: float | None
     hold_completed: bool
+    run_started_at: str | None = None
+    run_settings: dict | None = None
+    hold_reached_s: float | None = None
+    cooldown_s: float | None = None
+    stop_state: str | None = None
+    stop_elapsed_s: float | None = None
+    stop_stage: int | None = None
+    stop_fraction: float | None = None
+    stop_detail: str | None = None
     error: str = ""
+    events: tuple = ()
 
 class Application:
     """Owns hardware, control thread and immutable UI-facing snapshots."""
     def __init__(self, config):
         self.config = config
+        self._defaults = dict(target_temperature_c=45.0, hold_duration_s=60.0,
+            kp=config.PID_KP, ki=config.PID_KI, kd=config.PID_KD)
         self.hw = create_hardware(config)
         self.controller = Controller(self.hw, config)
         self.commands = SimpleQueue()
         self.samples = []
         self._lock = threading.Lock()
         self._error = ""
+        self._last_saved_run_started_at = None
+        self._last_run_record = None
+        self._events = []
+        self._run_started_monotonic = None
+        self._event_log_closed = True
+        self._pending_pid_event = None
+        self._last_door_state = self.hw.switches.state().value
+        self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run-storage")
         self._view = ViewState(False,0,0.0,"","Ready to run",0.0,config.MIN_SETPOINT,0.0,"unknown","ready",None,None,None,None,False)
         self._closing = threading.Event()
         self._closed = False
@@ -50,8 +72,7 @@ class Application:
         self._thread = threading.Thread(target=self._run, name="kiln-control", daemon=False)
         self._thread.start()
     def defaults(self):
-        return dict(target_temperature_c=45.0, hold_duration_s=60.0,
-            kp=self.config.PID_KP, ki=self.config.PID_KI, kd=self.config.PID_KD)
+        return dict(self._defaults)
     def command(self, name, values=None):
         self.commands.put((name, values))
     def _emergency_cut(self, reason):
@@ -62,11 +83,94 @@ class Application:
         with self._lock:
             view = self._view
             return view, tuple(self.samples)
+    @property
+    def last_run_record(self):
+        with self._lock:
+            return self._last_run_record
+    def _event_elapsed(self, now=None):
+        if self._run_started_monotonic is None:
+            return 0.0
+        return max(0.0, (time.monotonic() if now is None else now) - self._run_started_monotonic)
+
+    def _append_event(self, event_type, description, now=None, **details):
+        if self._run_started_monotonic is None or self._event_log_closed:
+            return
+        event = {"elapsed_s": round(self._event_elapsed(now), 3), "type": event_type,
+                 "description": description}
+        event.update(details)
+        self._events.append(event)
+        self._events.sort(key=lambda item: item["elapsed_s"])
+
+    def _flush_pid_event(self):
+        pending = self._pending_pid_event
+        self._pending_pid_event = None
+        if pending is None or pending["before"] == pending["after"]:
+            return
+        changed = {key: {"from": before, "to": after}
+                   for key, before, after in zip(("kp", "ki", "kd"), pending["before"], pending["after"])
+                   if before != after}
+        self._append_event("pid_gains_changed", "PID gains changed", pending["elapsed"],
+                           changes=changed)
+
+    def _record_state_transition(self, before, after, now):
+        if before == after:
+            return
+        labels = {
+            (State.HEATING, State.HOLDING): ("stage_completed", "Warm up completed"),
+            (State.HOLDING, State.COOLING): ("stage_completed", "Hold completed"),
+            (State.COOLING, State.COMPLETE): ("stage_completed", "Cool down completed"),
+        }
+        stage_event = labels.get((before, after))
+        if stage_event:
+            self._append_event(stage_event[0], stage_event[1], now)
+            if after == State.HOLDING:
+                self._append_event("stage_started", "Hold started", now)
+            elif after == State.COOLING:
+                self._append_event("stage_started", "Cool down started", now)
+        elif before == State.DOOR_MOVING and after == State.HEATING:
+            self._append_event("stage_started", "Warm up started", now)
+        if after == State.ABORTED:
+            if before == State.COOLING:
+                self._append_event("cooldown_completed", "Cool down completed after stop", now)
+            self._append_event("run_aborted", self.controller.status_text, now,
+                               stopped_during=self.controller.stop_state)
+        elif after == State.COMPLETE:
+            self._append_event("run_completed", "Run completed", now)
+        elif after in (State.FAULT, State.E_STOP):
+            self._append_event("run_faulted" if after == State.FAULT else "emergency_stop",
+                               self.controller.status_text, now, reason=self.controller.fault_reason)
+
     def _publish(self, error=""):
         fields = self.controller.snapshot_fields()
         with self._lock:
             self._error = error or self._error
-            self._view = ViewState(*fields, error=self._error)
+            view = ViewState(*fields, error=self._error, events=tuple(dict(event) for event in self._events))
+            self._view = view
+            samples = tuple(self.samples)
+        terminal = view.state in ("complete", "aborted", "fault", "e_stop")
+        if terminal and view.run_started_at and view.run_started_at != self._last_saved_run_started_at:
+            record = DataManager.build_run_record(view, samples)
+            with self._lock:
+                self._last_saved_run_started_at = view.run_started_at
+                self._last_run_record = record
+            try:
+                future = self._save_executor.submit(
+                    DataManager(self.config.DATA_DIRECTORY).export_run, record,
+                )
+                future.add_done_callback(self._save_run_done)
+            except RuntimeError as exc:
+                self._save_run_error(exc)
+    def _save_run_done(self, future):
+        try:
+            future.result()
+        except Exception as exc:
+            self._save_run_error(exc)
+
+    def _save_run_error(self, exc):
+        with self._lock:
+            self._error = f"Run auto-save failed: {exc}"
+            self._view = replace(self._view, error=self._error)
+
     def _apply_commands(self, now, temperature, age):
         while True:
             try: name, value = self.commands.get_nowait()
@@ -76,17 +180,63 @@ class Application:
                     self.controller.start(now, value["target_temperature_c"], value["hold_duration_s"],
                         (value["kp"],value["ki"],value["kd"]), temperature)
                     self.hw.heater.unlock()
-                    with self._lock: self.samples.clear(); self._error = ""
-                elif name == "stop": self.controller.stop()
-                elif name == "emergency": self.controller.emergency_stop(value)
-                elif name == "reset":
-                    self.controller.reset(now, temperature, age, self.hw.estop())
                     with self._lock:
                         self.samples.clear()
+                        self._events.clear()
                         self._error = ""
+                        self._last_run_record = None
+                    self._run_started_monotonic = now
+                    self._event_log_closed = False
+                    self._pending_pid_event = None
+                    self._append_event("run_started", "Run started", now,
+                        settings=dict(self.controller.run_settings))
+                    initial_door = self.hw.switches.state().value
+                    if initial_door in ("open", "closed"):
+                        self._append_event(
+                            "door_opened" if initial_door == "open" else "door_closed",
+                            f"Door was {initial_door} when run started", now)
+                    if self.controller.state == State.DOOR_MOVING:
+                        self._append_event("stage_started", "Closing door", now)
+                    else:
+                        self._append_event("stage_started", "Warm up started", now)
+                elif name == "stop":
+                    old_state = self.controller.state
+                    self.controller.stop(now)
+                    if old_state != self.controller.state:
+                        self._append_event("run_stopped", "Run stopped by user; cooling to safe temperature", now,
+                                           stopped_during=old_state.value)
+                        if old_state != State.COOLING:
+                            self._append_event("stage_started", "Safe cool down started", now)
+                elif name == "emergency":
+                    self.controller.emergency_stop(value)
+                    self._append_event("emergency_stop", "Emergency stop activated", now, reason=str(value))
+                elif name == "reset":
+                    self.controller.reset(now, temperature, age, self.hw.estop())
+                    self._run_started_monotonic = None
+                    self._event_log_closed = True
+                    self._pending_pid_event = None
+                    with self._lock:
+                        self.samples.clear()
+                        self._events.clear()
+                        self._error = ""
+                elif name == "defaults":
+                    if self.controller.active: raise RuntimeError("Settings cannot be imported during an active run")
+                    self._defaults = dict(value)
+                    self.controller.target = float(value["target_temperature_c"])
+                    self.controller.hold_s = float(value["hold_duration_s"])
+                    self.controller.gains = (float(value["kp"]), float(value["ki"]), float(value["kd"]))
+                    self.controller.pid.set_gains(*self.controller.gains)
                 elif name == "tune":
                     gains = (value["kp"],value["ki"],value["kd"])
+                    previous = tuple(self.controller.gains)
                     self.controller.pid.set_gains(*gains); self.controller.gains = gains
+                    if self.controller.active and previous != gains:
+                        pending = self._pending_pid_event
+                        self._pending_pid_event = {
+                            "before": pending["before"] if pending else previous,
+                            "after": gains, "elapsed": now,
+                            "last_change": now,
+                        }
                 elif name == "open":
                     if self.controller.state in (State.READY, State.COMPLETE) and self.controller.safety.door_may_open(temperature): self.hw.motor.open(now)
                 elif name == "close":
@@ -109,11 +259,24 @@ class Application:
                 if self.controller.active and temperature is not None:
                     elapsed = max(0.0, now - self.controller.run_started)
                     sample = {"elapsed_s": elapsed, "temperature_c": temperature,
-                        "target_temperature_c": self.controller.target, "heater_output_percent": self.hw.heater.percent}
+                        "target_temperature_c": self.controller.target, "heater_output_percent": self.hw.heater.percent,
+                        "kp": self.controller.gains[0], "ki": self.controller.gains[1], "kd": self.controller.gains[2]}
                     with self._lock: self.samples.append(sample)
                 control_due = now >= next_control
                 if control_due: next_control = now + self.config.LOOP_PERIOD_S
+                before_state = self.controller.state
                 self.controller.step(now, temperature, age, self.hw.estop(), control_due)
+                door_state = self.hw.switches.state().value
+                if door_state != self._last_door_state and self._run_started_monotonic is not None:
+                    event_type = "door_opened" if door_state == "open" else "door_closed"
+                    self._append_event(event_type, f"Door {door_state}", now)
+                self._last_door_state = door_state
+                self._record_state_transition(before_state, self.controller.state, now)
+                if self._pending_pid_event and now - self._pending_pid_event["last_change"] >= 0.6:
+                    self._flush_pid_event()
+                if self.controller.state in (State.COMPLETE, State.ABORTED, State.FAULT, State.E_STOP):
+                    self._flush_pid_event()
+                    self._event_log_closed = True
                 self.hw.heater.update(now)
                 self._publish()
                 next_tick += period
@@ -134,6 +297,7 @@ class Application:
         if self._thread.is_alive():
             self.hw.heater.emergency_off()
             raise RuntimeError("Control worker did not stop cleanly")
+        self._save_executor.shutdown(wait=True)
 
 
 

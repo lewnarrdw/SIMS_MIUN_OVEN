@@ -1,4 +1,5 @@
 ﻿"""Compact process state machine. All methods run on the hardware worker."""
+from datetime import datetime
 from enum import Enum
 from .pid import PID
 from .safety import SafetyMonitor
@@ -23,6 +24,12 @@ class Controller:
         self.state, self.fault_reason = State.READY, ""
         self.target, self.hold_s, self.gains = config.MIN_SETPOINT, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD)
         self.run_started = self.stable_since = self.hold_started = None
+        self.run_started_at = None
+        self.run_settings = {}
+        self.hold_reached_s = self.cooling_started = self.cooldown_s = None
+        self.stop_state = self.stop_elapsed_s = self.stop_stage = None
+        self.stop_fraction = None
+        self.stop_detail = None
         self.door_goal = None
         self.status_text = "Ready to run"
         self.progress_fraction, self.progress_detail = 0.0, ""
@@ -43,6 +50,12 @@ class Controller:
         self.hold_s = min(self.config.HOLD_DURATION_MAX_S, max(self.config.HOLD_DURATION_MIN_S, float(hold_s)))
         self.pid.set_gains(*gains); self.gains = tuple(gains); self.pid.reset()
         self.run_started, self.stable_since, self.hold_started = now, None, None
+        self.run_started_at = datetime.now().astimezone().isoformat(timespec="microseconds")
+        self.run_settings = {"target_temperature_c": self.target, "hold_duration_s": self.hold_s,
+            "kp": self.gains[0], "ki": self.gains[1], "kd": self.gains[2]}
+        self.hold_reached_s = self.cooling_started = self.cooldown_s = None
+        self.stop_state = self.stop_elapsed_s = self.stop_stage = None
+        self.stop_fraction = self.stop_detail = None
         self.last_pid_time = None
         self.run_ended = None
         self.peak_temp = self.peak_time = self.hold_min = self.hold_min_time = None
@@ -61,11 +74,21 @@ class Controller:
         self.status_text = text or state.value.replace("_", " ").title()
         self.hw.tower.show(state.value)
         if state in (State.HEATING, State.READY): self.pid.reset()
-    def stop(self):
+    def stop(self, now):
         if self.active:
+            if self.stop_state is None:
+                stages = {State.DOOR_MOVING: 1, State.HEATING: 1, State.HOLDING: 2, State.COOLING: 3}
+                self.stop_state = self.state.value
+                self.stop_elapsed_s = max(0.0, now - self.run_started)
+                self.stop_stage = stages[self.state]
+                self.stop_fraction = 0.0 if self.state == State.COOLING else self.progress_fraction
+                self.stop_detail = "Cooling was in progress" if self.state == State.COOLING else self.progress_detail
             self.completion_allowed = False
             self.hw.heater.off()
-            self._set_state(State.COOLING, "Cooling down")
+            self.cooling_started = now if self.cooling_started is None else self.cooling_started
+            self.progress_fraction = 0.0
+            self.progress_detail = "Cooling to safe temperature"
+            self._set_state(State.COOLING, "Stopped; cooling to safe temperature")
     def emergency_stop(self, reason="emergency_stop"):
         self.hw.heater.emergency_off(); self.hw.motor.stop()
         self.fault_reason = reason
@@ -114,7 +137,7 @@ class Controller:
                     self.progress_fraction = min(1.0, held/self.config.STABLE_TIME_S)
                     self.progress_detail = f"Stable {held:.0f}/{self.config.STABLE_TIME_S:.0f} s"
                     if held >= self.config.STABLE_TIME_S:
-                        self.hold_started = now; self.hold_min, self.hold_min_time = temperature, now-self.run_started
+                        self.hold_started = now; self.hold_reached_s = now-self.run_started; self.hold_min, self.hold_min_time = temperature, now-self.run_started
                         self._set_state(State.HOLDING, "Holding target")
                 else: self.stable_since, self.progress_fraction, self.progress_detail = None, 0.0, ""
             else:
@@ -125,6 +148,7 @@ class Controller:
                 self.progress_detail = f"{max(0.0,self.hold_s-elapsed):.0f} s remaining"
                 if elapsed >= self.hold_s:
                     self.hold_completed = True
+                    self.cooling_started = now
                     self.hw.heater.off(); self._set_state(State.COOLING, "Cooling down")
         elif self.state == State.COOLING:
             self.hw.heater.off()
@@ -132,17 +156,25 @@ class Controller:
                 if door != DoorState.OPEN and self.hw.motor.state.value == "idle":
                     self.hw.motor.open(now)
                 elif door == DoorState.OPEN and self.hw.motor.state.value == "idle":
-                    self._set_state(State.COMPLETE if self.completion_allowed else State.ABORTED, "Run complete" if self.completion_allowed else "Run stopped")
+                    self.cooldown_s = max(0.0, now - self.cooling_started) if self.cooling_started is not None else None
+                    if self.completion_allowed:
+                        self._set_state(State.COMPLETE, "Run complete")
+                    else:
+                        stopped_during = self.stop_state.replace("_", " ").title() if self.stop_state else "run"
+                        self._set_state(State.ABORTED, f"Stopped during {stopped_during}; cooldown complete")
         self.hw.tower.show(self.state.value)
     def snapshot_fields(self):
-        stage = {State.READY:0,State.COMPLETE:0,State.ABORTED:0,State.FAULT:0,State.E_STOP:0,
+        stage = {State.READY:0,State.COMPLETE:4,State.ABORTED:(self.stop_stage or 0),State.FAULT:0,State.E_STOP:0,
             State.DOOR_MOVING:1,State.HEATING:1,State.HOLDING:2,State.COOLING:3}[self.state]
         elapsed = 0.0 if self.run_started is None else max(0.0, (self.last_step if self.run_ended is None else self.run_ended)-self.run_started)
-        detail = self.progress_detail
+        fraction = self.stop_fraction if self.state == State.ABORTED and self.stop_fraction is not None else self.progress_fraction
+        detail = self.stop_detail if self.state == State.ABORTED and self.stop_detail is not None else self.progress_detail
         if self.state in (State.FAULT,State.E_STOP): detail = self.fault_reason
-        return (self.active, stage, self.progress_fraction, detail, self.status_text, elapsed,
+        return (self.active, stage, fraction, detail, self.status_text, elapsed,
             self.target, self.hw.heater.percent, self.hw.switches.state().value, self.state.value,
-            self.peak_time, self.peak_temp, self.hold_min_time, self.hold_min, self.hold_completed)
+            self.peak_time, self.peak_temp, self.hold_min_time, self.hold_min, self.hold_completed,
+            self.run_started_at, self.run_settings, self.hold_reached_s, self.cooldown_s,
+            self.stop_state, self.stop_elapsed_s, self.stop_stage, self.stop_fraction, self.stop_detail)
 
 
 

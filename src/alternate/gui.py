@@ -142,8 +142,11 @@ class OvenWindow(QtWidgets.QMainWindow):
             ("Stop", self.stop_process, "stop", "#d45b52"),
             ("Reset", self.reset_process, "reset", "#d99a2b"),
             (None, None, None, None),
-            ("Import", self.import_settings, "import", "#63a8e8"),
-            ("Export", self.export_run_data, "export", "#63a8e8"),
+            ("Import run", self.import_run, "import", "#63a8e8"),
+            ("Export run", self.export_run_data, "export", "#63a8e8"),
+            ("Import settings", self.import_settings, "import", "#63a8e8"),
+            ("Export settings", self.export_settings, "export", "#63a8e8"),
+
             ("Event log", self.show_run_events, "events", "#63a8e8"),
         )
         for label, callback, icon_name, accent in action_specs:
@@ -437,6 +440,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         pass
 
     def reset_process(self) -> None:
+        pass
+
+    def import_run(self) -> None:
         pass
 
     def import_settings(self) -> None:
