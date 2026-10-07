@@ -144,8 +144,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             (None, None, None, None),
             ("Import run", self.import_run, "import", "#63a8e8"),
             ("Export run", self.export_run_data, "export", "#63a8e8"),
-            ("Import settings", self.import_settings, "import", "#63a8e8"),
-            ("Export settings", self.export_settings, "export", "#63a8e8"),
+            ("Import settings", self.import_settings, "import_settings", "#63a8e8"),
+            ("Export settings", self.export_settings, "export_settings", "#63a8e8"),
 
             ("Event log", self.show_run_events, "events", "#63a8e8"),
         )
@@ -195,6 +195,24 @@ class OvenWindow(QtWidgets.QMainWindow):
             painter.drawPolygon(QtGui.QPolygonF((
                 QtCore.QPointF(4, 4), QtCore.QPointF(4, 11), QtCore.QPointF(10, 7),
             )))
+        elif symbol in ("import_settings", "export_settings"):
+            # Compact control sliders paired with the transfer direction.
+            direction = "import" if symbol == "import_settings" else "export"
+            painter.drawLine(QtCore.QPointF(4, 7), QtCore.QPointF(13, 7))
+            painter.drawLine(QtCore.QPointF(4, 12), QtCore.QPointF(13, 12))
+            painter.drawLine(QtCore.QPointF(4, 17), QtCore.QPointF(13, 17))
+            painter.setBrush(QtGui.QColor(accent))
+            for x, y in ((8, 7), (11, 12), (6, 17)):
+                painter.drawEllipse(QtCore.QPointF(x, y), 1.5, 1.5)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            if direction == "import":
+                painter.drawLine(QtCore.QPointF(18, 5), QtCore.QPointF(18, 18))
+                painter.drawLine(QtCore.QPointF(15, 15), QtCore.QPointF(18, 18))
+                painter.drawLine(QtCore.QPointF(21, 15), QtCore.QPointF(18, 18))
+            else:
+                painter.drawLine(QtCore.QPointF(18, 19), QtCore.QPointF(18, 6))
+                painter.drawLine(QtCore.QPointF(15, 9), QtCore.QPointF(18, 6))
+                painter.drawLine(QtCore.QPointF(21, 9), QtCore.QPointF(18, 6))
         elif symbol in ("import", "export"):
             # A tray makes the direction of the transfer unambiguous.
             tray = QtGui.QPainterPath(QtCore.QPointF(5, 14))
