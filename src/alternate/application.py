@@ -43,7 +43,7 @@ class Application:
     """Owns hardware, control thread and immutable UI-facing snapshots."""
     def __init__(self, config):
         self.config = config
-        self._defaults = dict(target_temperature_c=45.0, hold_duration_s=60.0,
+        self._start_settings = dict(target_temperature_c=45.0, hold_duration_s=60.0,
             kp=config.PID_KP, ki=config.PID_KI, kd=config.PID_KD)
         self.hw = create_hardware(config)
         self.controller = Controller(self.hw, config)
@@ -62,7 +62,7 @@ class Application:
         self._view = ViewState(False,0,0.0,"","Ready to run",0.0,config.MIN_SETPOINT,0.0,"unknown","ready",None,None,None,None,False)
         self._closing = threading.Event()
         self._closed = False
-        self.hw.buttons["start"].when_pressed = lambda: self.command("start", self.defaults())
+        self.hw.buttons["start"].when_pressed = lambda: self.command("start")
         self.hw.buttons["stop"].when_pressed = lambda: self.command("stop")
         self.hw.buttons["open"].when_pressed = lambda: self.command("open")
         self.hw.buttons["close"].when_pressed = lambda: self.command("close")
@@ -71,8 +71,6 @@ class Application:
         else: self.hw.estop_device.when_pressed = callback
         self._thread = threading.Thread(target=self._run, name="kiln-control", daemon=False)
         self._thread.start()
-    def defaults(self):
-        return dict(self._defaults)
     def command(self, name, values=None):
         self.commands.put((name, values))
     def _emergency_cut(self, reason):
@@ -177,8 +175,9 @@ class Application:
             except Empty: return
             try:
                 if name == "start":
-                    self.controller.start(now, value["target_temperature_c"], value["hold_duration_s"],
-                        (value["kp"],value["ki"],value["kd"]), temperature)
+                    settings = self._start_settings
+                    self.controller.start(now, settings["target_temperature_c"], settings["hold_duration_s"],
+                        (settings["kp"],settings["ki"],settings["kd"]), temperature)
                     self.hw.heater.unlock()
                     with self._lock:
                         self.samples.clear()
@@ -221,11 +220,13 @@ class Application:
                         self._error = ""
                 elif name == "defaults":
                     if self.controller.active: raise RuntimeError("Settings cannot be imported during an active run")
-                    self._defaults = dict(value)
+                    self._start_settings = dict(value)
                     self.controller.target = float(value["target_temperature_c"])
                     self.controller.hold_s = float(value["hold_duration_s"])
                     self.controller.gains = (float(value["kp"]), float(value["ki"]), float(value["kd"]))
                     self.controller.pid.set_gains(*self.controller.gains)
+                elif name == "settings":
+                    self._start_settings = dict(value)
                 elif name == "tune":
                     gains = (value["kp"],value["ki"],value["kd"])
                     previous = tuple(self.controller.gains)

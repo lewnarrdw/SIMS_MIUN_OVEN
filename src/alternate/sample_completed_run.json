@@ -1,0 +1,529 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-10-12T10:00:00",
+  "settings": {
+    "target_temperature_c": 45.0,
+    "hold_duration_s": 60.0,
+    "kp": 5.0,
+    "ki": 0.1,
+    "kd": 1.0
+  },
+  "result": {
+    "state": "complete",
+    "status": "Run complete",
+    "duration_s": 240.0,
+    "reason": "",
+    "hold_reached_s": 90.0,
+    "cooldown_s": 90.0,
+    "hold_completed": true,
+    "stop_state": null,
+    "stop_elapsed_s": null
+  },
+  "progress": {
+    "stage": 4,
+    "fraction": 1.0,
+    "detail": "Run complete"
+  },
+  "events": [
+    {
+      "elapsed_s": 0.0,
+      "type": "run_started",
+      "description": "Run started",
+      "settings": {
+        "target_temperature_c": 45.0,
+        "hold_duration_s": 60.0,
+        "kp": 5.0,
+        "ki": 0.1,
+        "kd": 1.0
+      }
+    },
+    {
+      "elapsed_s": 0.0,
+      "type": "stage_started",
+      "description": "Warm up started"
+    },
+    {
+      "elapsed_s": 90.0,
+      "type": "stage_completed",
+      "description": "Warm up completed"
+    },
+    {
+      "elapsed_s": 90.0,
+      "type": "stage_started",
+      "description": "Hold started"
+    },
+    {
+      "elapsed_s": 150.0,
+      "type": "stage_completed",
+      "description": "Hold completed"
+    },
+    {
+      "elapsed_s": 150.0,
+      "type": "stage_started",
+      "description": "Cool down started"
+    },
+    {
+      "elapsed_s": 240.0,
+      "type": "stage_completed",
+      "description": "Cool down completed"
+    },
+    {
+      "elapsed_s": 240.0,
+      "type": "run_completed",
+      "description": "Run completed"
+    }
+  ],
+  "metrics": {
+    "peak": {
+      "temperature_c": 46.196,
+      "elapsed_s": 105.0
+    },
+    "hold_minimum": {
+      "temperature_c": 44.432,
+      "elapsed_s": 130.0
+    }
+  },
+  "samples": [
+    {
+      "elapsed_s": 0.0,
+      "temperature_c": 20.0,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 75.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 5.0,
+      "temperature_c": 21.389,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 72.75,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 10.0,
+      "temperature_c": 22.778,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 70.5,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 15.0,
+      "temperature_c": 24.167,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 68.25,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 20.0,
+      "temperature_c": 25.556,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 66.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 25.0,
+      "temperature_c": 26.944,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 63.75,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 30.0,
+      "temperature_c": 28.333,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 61.5,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 35.0,
+      "temperature_c": 29.722,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 59.25,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 40.0,
+      "temperature_c": 31.111,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 57.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 45.0,
+      "temperature_c": 32.5,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 54.75,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 50.0,
+      "temperature_c": 33.889,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 52.5,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 55.0,
+      "temperature_c": 35.278,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 50.25,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 60.0,
+      "temperature_c": 36.667,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 48.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 65.0,
+      "temperature_c": 38.056,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 45.75,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 70.0,
+      "temperature_c": 39.444,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 43.5,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 75.0,
+      "temperature_c": 40.833,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 41.25,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 80.0,
+      "temperature_c": 42.222,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 39.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 85.0,
+      "temperature_c": 43.611,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 36.75,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 90.0,
+      "temperature_c": 45.0,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 34.5,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 95.0,
+      "temperature_c": 45.775,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 21.24,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 100.0,
+      "temperature_c": 46.107,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 23.92,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 105.0,
+      "temperature_c": 46.196,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 25.59,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 110.0,
+      "temperature_c": 46.016,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 25.96,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 115.0,
+      "temperature_c": 45.62,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 24.97,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 120.0,
+      "temperature_c": 45.128,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 22.79,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 125.0,
+      "temperature_c": 44.688,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 19.78,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 130.0,
+      "temperature_c": 44.432,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 16.48,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 135.0,
+      "temperature_c": 44.437,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 13.43,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 140.0,
+      "temperature_c": 44.701,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 11.16,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 145.0,
+      "temperature_c": 45.146,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 10.07,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 150.0,
+      "temperature_c": 45.637,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 10.33,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 155.0,
+      "temperature_c": 44.111,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 160.0,
+      "temperature_c": 43.222,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 165.0,
+      "temperature_c": 42.333,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 170.0,
+      "temperature_c": 41.444,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 175.0,
+      "temperature_c": 40.556,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 180.0,
+      "temperature_c": 39.667,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 185.0,
+      "temperature_c": 38.778,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 190.0,
+      "temperature_c": 37.889,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 195.0,
+      "temperature_c": 37.0,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 200.0,
+      "temperature_c": 36.111,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 205.0,
+      "temperature_c": 35.222,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 210.0,
+      "temperature_c": 34.333,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 215.0,
+      "temperature_c": 33.444,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 220.0,
+      "temperature_c": 32.556,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 225.0,
+      "temperature_c": 31.667,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 230.0,
+      "temperature_c": 30.778,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 235.0,
+      "temperature_c": 29.889,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    },
+    {
+      "elapsed_s": 240.0,
+      "temperature_c": 29.0,
+      "target_temperature_c": 45.0,
+      "heater_output_percent": 0.0,
+      "kp": 5.0,
+      "ki": 0.1,
+      "kd": 1.0
+    }
+  ]
+}

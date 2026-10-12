@@ -2,12 +2,38 @@
 from __future__ import annotations
 import sys
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from PySide6 import QtCore, QtWidgets
 import config
 import gui
 from application import Application
 from data_manager import DataManager
+
+
+class _ImportPreviewService:
+    """Minimal inert service for temporarily previewing imported runs on Windows."""
+
+    last_run_record = None
+
+    def __init__(self):
+        self._view = SimpleNamespace(
+            running=False, stage=0, fraction=0.0, detail="", status="Ready to run",
+            elapsed_s=0.0, target_c=config.MIN_SETPOINT, output_percent=0.0,
+            door="unknown", state="ready", peak_time_s=None, peak_c=None,
+            hold_min_time_s=None, hold_min_c=None, hold_completed=False,
+            hold_reached_s=None, cooldown_s=None, stop_state=None,
+            stop_elapsed_s=None, error="", events=(), run_started_at=None,
+        )
+
+    def snapshot(self):
+        return self._view, []
+
+    def command(self, _name, _values=None):
+        return None
+
+    def close(self):
+        return None
 
 class KilnWindow(gui.OvenWindow):
     """Thin view adapter; device work stays in Application's worker."""
@@ -16,6 +42,7 @@ class KilnWindow(gui.OvenWindow):
         self.data = DataManager(config.DATA_DIRECTORY)
         self._markers_run = set()
         self._historical_record = None
+        self._historical_range_pending = False
         self._last_run_record = None
         super().__init__()
         self._timer = QtCore.QTimer(self)
@@ -26,8 +53,11 @@ class KilnWindow(gui.OvenWindow):
         self.kp_input.valueChanged.connect(self._tune)
         self.ki_input.valueChanged.connect(self._tune)
         self.kd_input.valueChanged.connect(self._tune)
+        for widget in (self.target_input, self.hold_input, self.kp_input, self.ki_input, self.kd_input):
+            widget.valueChanged.connect(self._sync_start_settings)
         self.restore_pid_defaults()
         self.restore_process_defaults()
+        self._sync_start_settings()
 
     def _settings(self):
         return {"target_temperature_c": self.target_input.value(), "hold_duration_s": self.hold_input.value(),
@@ -36,6 +66,9 @@ class KilnWindow(gui.OvenWindow):
     def _tune(self, *_):
         if self._historical_record is None:
             self.service.command("tune", self._settings())
+
+    def _sync_start_settings(self, *_):
+        self.service.command("settings", self._settings())
 
     def start_process(self):
         self._historical_record = None
@@ -46,7 +79,7 @@ class KilnWindow(gui.OvenWindow):
         self.temperature_curve.setData([], [])
         self.duty_curve.setData([], [])
         self.goal_curve.setData([], [])
-        self.service.command("start", self._settings())
+        self.service.command("start")
 
     def stop_process(self):
         self.service.command("stop")
@@ -83,6 +116,8 @@ class KilnWindow(gui.OvenWindow):
                 error=result.get("reason", ""), events=tuple(record.get("events", ())),
             )
             samples = record["samples"]
+        time_extent_s = max(view.elapsed_s, samples[-1]["elapsed_s"] if samples else 0.0)
+        self._set_graph_time_extent(time_extent_s)
         if samples:
             times = [row["elapsed_s"] for row in samples]
             self.temperature_curve.setData(times, [row["temperature_c"] for row in samples])
@@ -90,9 +125,13 @@ class KilnWindow(gui.OvenWindow):
             self.duty_curve.setData(times, [row["heater_output_percent"] for row in samples])
             if self._historical_record is not None:
                 end_s = self._historical_record["result"]["duration_s"]
-                self.graph_item.setXRange(max(0.0, end_s - 120.0), max(120.0, end_s), padding=0)
+                if self._historical_range_pending:
+                    self.fit_graph_to_data()
+                    self._historical_range_pending = False
             elif times[-1] > 120.0:
-                self.graph_item.setXRange(max(0.0, times[-1] - 120.0), times[-1], padding=0)
+                visible_right = self.graph_item.viewRange()[0][1]
+                if times[-1] - visible_right <= 2.0:
+                    self.graph_item.setXRange(max(0.0, times[-1] - 120.0), times[-1], padding=0)
         else:
             self.temperature_curve.setData([], [])
             self.goal_curve.setData([], [])
@@ -117,6 +156,7 @@ class KilnWindow(gui.OvenWindow):
         if view.state == "complete" and view.peak_c is not None and "peak" not in self._markers_run:
             self.show_peak_temperature_marker(view.peak_time_s, view.peak_c, view.target_c)
             self._markers_run.add("peak")
+            self.fit_graph_to_data()
         if view.hold_reached_s is not None and "hold_reached" not in self._markers_run:
             self._show_event_marker(view.hold_reached_s, "Hold reached", "#8fc5f5", samples)
             self._markers_run.add("hold_reached")
@@ -172,7 +212,10 @@ class KilnWindow(gui.OvenWindow):
         if view.running:
             self.statusBar().showMessage("Stop the active run before importing a run", 5000)
             return
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import run", "", "Kiln run (*.json)")
+        sample_path = Path(__file__).with_name("sample_completed_run.json")
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Import run", str(sample_path), "Kiln run (*.json)"
+        )
         if not path:
             return
         try:
@@ -180,6 +223,7 @@ class KilnWindow(gui.OvenWindow):
             self._validate_settings(record["settings"])
             self._apply_settings(record["settings"])
             self._historical_record = record
+            self._historical_range_pending = True
             self._last_run_record = record
             self._clear_temperature_markers()
             self._markers_run.clear()
@@ -269,13 +313,14 @@ class KilnWindow(gui.OvenWindow):
 def main():
     app = QtWidgets.QApplication(sys.argv)
 
-    # TEMPORARY WINDOWS UI-ONLY PATH: delete this branch when running on the Pi.
-    # It deliberately starts no application service and opens no GPIO or sensor hardware.
+    # TEMPORARY WINDOWS import preview: it starts no service or hardware.
     if sys.platform == "win32":
-        window = gui.OvenWindow()
+        window = KilnWindow(_ImportPreviewService())
         window.setWindowTitle("Oven Controller (UI only - no hardware)")
         for toolbar in window.findChildren(QtWidgets.QToolBar):
-            toolbar.setEnabled(False)
+            for action in toolbar.actions():
+                if action.text() != "Import run":
+                    action.setEnabled(False)
         window.show()
         return app.exec()
 
