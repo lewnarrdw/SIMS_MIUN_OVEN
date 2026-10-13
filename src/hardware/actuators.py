@@ -40,7 +40,7 @@ class DoorMotor:
     def _drive(self, opening, now):
         self.stop()
         (self.in1 if opening else self.in2).on()
-        self.enable.on()
+        if self.enable is not None: self.enable.on()
         self.state = MotorState.OPENING if opening else MotorState.CLOSING
         self.started_at = now
     def open(self, now): self._move(DoorState.OPEN, now)
@@ -51,7 +51,8 @@ class DoorMotor:
         if state == DoorState.ERROR: self._fail("switch_error")
         elif state != goal: self._drive(goal == DoorState.OPEN, now)
     def stop(self):
-        self.in1.off(); self.in2.off(); self.enable.off()
+        self.in1.off(); self.in2.off()
+        if self.enable is not None: self.enable.off()
         if self.state in (MotorState.OPENING, MotorState.CLOSING): self.state = MotorState.IDLE
     def _fail(self, reason):
         self.stop()
@@ -68,7 +69,8 @@ class DoorMotor:
         self.state, self.fault_reason = MotorState.IDLE, None
     def close(self):
         self.stop()
-        self.in1.close(); self.in2.close(); self.enable.close()
+        self.in1.close(); self.in2.close()
+        if self.enable is not None: self.enable.close()
 
 class SignalTower:
     def __init__(self, outputs): self.outputs = outputs

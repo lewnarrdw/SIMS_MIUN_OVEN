@@ -19,6 +19,9 @@ MAX_DURATION_S = 120.0
 MAX_TEMPERATURE_DISPLAY_C = 65.0
 MAX_OUTPUT_PERCENT = 100.0
 GRAPH_WINDOW_S = 120.0
+GRAPH_INITIAL_BUFFER_S = 120.0
+GRAPH_EXPANSION_TRIGGER = 0.8
+GRAPH_EXPANSION_FACTOR = 1.25
 
 
 class StageProgress(QtWidgets.QWidget):
@@ -533,8 +536,8 @@ class OvenWindow(QtWidgets.QMainWindow):
     def _set_graph_time_extent(self, end_s: float) -> None:
         """Keep panning bounded to the time covered by the current run."""
         x_max = max(GRAPH_WINDOW_S, end_s)
-        self.graph_item.vb.setLimits(xMin=0, xMax=x_max)
-        self.duty_view.setLimits(xMin=0, xMax=x_max)
+        self.graph_item.vb.setLimits(xMin=0, xMax=x_max, maxXRange=x_max)
+        self.duty_view.setLimits(xMin=0, xMax=x_max, maxXRange=x_max)
 
     def start_process(self) -> None:
         self._clear_temperature_markers()

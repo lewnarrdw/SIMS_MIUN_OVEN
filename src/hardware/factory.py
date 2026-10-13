@@ -45,9 +45,11 @@ def create_hardware(config):
         closed = DigitalInputDevice(config.DOOR_LIMIT_CLOSED_PIN, pull_up=True, active_state=False)
         devices.extend((opened, closed))
         switches = DoorSwitches(opened, closed)
+        enable_pin = getattr(config, "MOTOR_ENABLE_PIN", None)
+        motor_enable = output(enable_pin) if enable_pin is not None else None
         motor = DoorMotor(
             output(config.MOTOR_IN1_PIN), output(config.MOTOR_IN2_PIN),
-            output(config.MOTOR_SLEEP_PIN), switches, config.DOOR_TIMEOUT_S,
+            motor_enable, switches, config.DOOR_TIMEOUT_S,
         )
         buttons = {
             name: button(pin) for name, pin in {

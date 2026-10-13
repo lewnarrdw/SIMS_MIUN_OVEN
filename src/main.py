@@ -45,6 +45,7 @@ class KilnWindow(gui.OvenWindow):
         self._historical_range_pending = False
         self._last_run_record = None
         super().__init__()
+        self._live_graph_x_max = gui.GRAPH_WINDOW_S
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(self.refresh)
@@ -75,7 +76,12 @@ class KilnWindow(gui.OvenWindow):
         self._last_run_record = None
         self._clear_temperature_markers()
         self._markers_run.clear()
-        self.graph_item.setXRange(0, 120.0, padding=0)
+        self._live_graph_x_max = max(
+            gui.GRAPH_WINDOW_S,
+            self.hold_input.value() + gui.GRAPH_INITIAL_BUFFER_S,
+        )
+        self._set_graph_time_extent(self._live_graph_x_max)
+        self.graph_item.setXRange(0, self._live_graph_x_max, padding=0)
         self.temperature_curve.setData([], [])
         self.duty_curve.setData([], [])
         self.goal_curve.setData([], [])
@@ -117,7 +123,18 @@ class KilnWindow(gui.OvenWindow):
             )
             samples = record["samples"]
         time_extent_s = max(view.elapsed_s, samples[-1]["elapsed_s"] if samples else 0.0)
-        self._set_graph_time_extent(time_extent_s)
+        if samples and self._historical_record is None:
+            if time_extent_s >= self._live_graph_x_max * gui.GRAPH_EXPANSION_TRIGGER:
+                self._live_graph_x_max = max(
+                    self._live_graph_x_max * gui.GRAPH_EXPANSION_FACTOR,
+                    time_extent_s * gui.GRAPH_EXPANSION_FACTOR,
+                )
+                self.graph_item.setXRange(0, self._live_graph_x_max, padding=0)
+        bounded_extent_s = max(
+            time_extent_s,
+            self._live_graph_x_max if self._historical_record is None else 0.0,
+        )
+        self._set_graph_time_extent(bounded_extent_s)
         if samples:
             times = [row["elapsed_s"] for row in samples]
             self.temperature_curve.setData(times, [row["temperature_c"] for row in samples])
@@ -128,10 +145,6 @@ class KilnWindow(gui.OvenWindow):
                 if self._historical_range_pending:
                     self.fit_graph_to_data()
                     self._historical_range_pending = False
-            elif times[-1] > 120.0:
-                visible_right = self.graph_item.viewRange()[0][1]
-                if times[-1] - visible_right <= 2.0:
-                    self.graph_item.setXRange(max(0.0, times[-1] - 120.0), times[-1], padding=0)
         else:
             self.temperature_curve.setData([], [])
             self.goal_curve.setData([], [])
@@ -156,7 +169,6 @@ class KilnWindow(gui.OvenWindow):
         if view.state == "complete" and view.peak_c is not None and "peak" not in self._markers_run:
             self.show_peak_temperature_marker(view.peak_time_s, view.peak_c, view.target_c)
             self._markers_run.add("peak")
-            self.fit_graph_to_data()
         if view.hold_reached_s is not None and "hold_reached" not in self._markers_run:
             self._show_event_marker(view.hold_reached_s, "Hold reached", "#8fc5f5", samples)
             self._markers_run.add("hold_reached")
@@ -167,6 +179,9 @@ class KilnWindow(gui.OvenWindow):
         if terminal and view.cooldown_s is not None and "cooldown" not in self._markers_run:
             self._show_event_marker(view.elapsed_s, f"Cooldown {view.cooldown_s:.0f} s", "#63a8e8", samples)
             self._markers_run.add("cooldown")
+        if terminal and "final_fit" not in self._markers_run:
+            self.fit_graph_to_data()
+            self._markers_run.add("final_fit")
 
     def _show_event_marker(self, elapsed_s, label, color, samples):
         if not samples:
