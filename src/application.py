@@ -36,8 +36,12 @@ class ViewState:
     stop_stage: int | None = None
     stop_fraction: float | None = None
     stop_detail: str | None = None
+    hold_elapsed_s: float = 0.0
     error: str = ""
     events: tuple = ()
+    current_temperature_c: float | None = None
+    can_start: bool = False
+    ready_reason: str = "Waiting for a valid temperature reading"
 
 class Application:
     """Owns hardware, control thread and immutable UI-facing snapshots."""
@@ -60,6 +64,10 @@ class Application:
         self._last_door_state = self.hw.switches.state().value
         self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run-storage")
         self._view = ViewState(False,0,0.0,"","Ready to run",0.0,config.MIN_SETPOINT,0.0,"unknown","ready",None,None,None,None,False)
+        self._current_temperature_c = None
+        self._sensor_age_s = float("inf")
+        self._estop_active = False
+        self._manual_override_active = False
         self._closing = threading.Event()
         self._closed = False
         self.hw.buttons["start"].when_pressed = lambda: self.command("start")
@@ -74,9 +82,12 @@ class Application:
     def command(self, name, values=None):
         self.commands.put((name, values))
     def _emergency_cut(self, reason):
+        self._manual_override_active = False
         self.hw.heater.emergency_off()
         self.hw.motor.stop()
         self.command("emergency", reason)
+    def emergency_stop(self):
+        self._emergency_cut("gui_emergency_stop")
     def snapshot(self):
         with self._lock:
             view = self._view
@@ -127,6 +138,12 @@ class Application:
                 self._append_event("stage_started", "Cool down started", now)
         elif before == State.DOOR_MOVING and after == State.HEATING:
             self._append_event("stage_started", "Warm up started", now)
+        elif after == State.PAUSED:
+            self._append_event("run_paused", self.controller.status_text, now,
+                               stage=self.controller.stop_state)
+        elif before == State.PAUSED and after in (State.HEATING, State.HOLDING, State.COOLING):
+            self._append_event("run_resumed", self.controller.status_text, now,
+                               stage=after.value)
         if after == State.ABORTED:
             if before == State.COOLING:
                 self._append_event("cooldown_completed", "Cool down completed after stop", now)
@@ -140,13 +157,43 @@ class Application:
 
     def _publish(self, error=""):
         fields = self.controller.snapshot_fields()
+        state = self.controller.state
+        allowed_state = state in (State.READY, State.COMPLETE, State.ABORTED)
+        reason = ""
+        if not allowed_state:
+            reason = "Reset the safety fault before starting" if state in (State.FAULT, State.E_STOP) else "A run is already in progress"
+        else:
+            reason = self.controller.safety.check(
+                self._current_temperature_c, self._sensor_age_s, self.hw.switches.state(),
+                self.hw.motor.fault_reason, False, self._estop_active,
+            ) or ""
+            if not reason and self.hw.motor.state.value != "idle":
+                reason = "Wait for the door motor to stop"
+            if not reason:
+                try:
+                    self.controller.safety.validate_setpoint(self._start_settings["target_temperature_c"])
+                except (ValueError, KeyError) as exc:
+                    reason = str(exc)
+            if not reason and self._current_temperature_c is None:
+                reason = "Waiting for a valid temperature reading"
+        ready_text = {
+            "sensor_timeout": "Temperature sensor is not responding",
+            "sensor_invalid": "Temperature reading is invalid",
+            "over_temperature": "Temperature is above the safe start limit",
+            "door_error": "Door sensor fault",
+            "emergency_stop": "Emergency stop is active",
+        }.get(reason, reason)
         with self._lock:
             self._error = error or self._error
-            view = ViewState(*fields, error=self._error, events=tuple(dict(event) for event in self._events))
+            view = ViewState(*fields, error=self._error, events=tuple(dict(event) for event in self._events),
+                current_temperature_c=self._current_temperature_c,
+                can_start=not reason and allowed_state, ready_reason=ready_text)
             self._view = view
             samples = tuple(self.samples)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
-        if terminal and view.run_started_at and view.run_started_at != self._last_saved_run_started_at:
+        if (terminal or view.state == "paused") and view.run_started_at and (
+                terminal and view.run_started_at != self._last_saved_run_started_at
+                or view.state == "paused" and view.run_started_at != self._last_saved_run_started_at):
             record = DataManager.build_run_record(view, samples)
             with self._lock:
                 self._last_saved_run_started_at = view.run_started_at
@@ -175,6 +222,24 @@ class Application:
             except Empty: return
             try:
                 if name == "start":
+                    if self.controller.state == State.PAUSED:
+                        fault = self.controller.safety.check(
+                            temperature, age, self.hw.switches.state(),
+                            self.hw.motor.fault_reason, False, self._estop_active,
+                        )
+                        if fault:
+                            raise RuntimeError(f"Cannot resume while safety condition remains: {fault}")
+                        self.controller.resume(now, temperature)
+                        self._manual_override_active = False
+                        self._last_saved_run_started_at = None
+                        continue
+                    if self.controller.active:
+                        if self._manual_override_active:
+                            self._manual_override_active = False
+                            self.hw.heater.off()
+                        continue
+                    self._manual_override_active = False
+                    self.hw.heater.off()
                     settings = self._start_settings
                     self.controller.start(now, settings["target_temperature_c"], settings["hold_duration_s"],
                         (settings["kp"],settings["ki"],settings["kd"]), temperature)
@@ -199,17 +264,19 @@ class Application:
                     else:
                         self._append_event("stage_started", "Warm up started", now)
                 elif name == "stop":
+                    self._manual_override_active = False
+                    self.hw.heater.off()
                     old_state = self.controller.state
                     self.controller.stop(now)
                     if old_state != self.controller.state:
-                        self._append_event("run_stopped", "Run stopped by user; cooling to safe temperature", now,
+                        self._append_event("run_stopped", "Run paused by user; heater off", now,
                                            stopped_during=old_state.value)
-                        if old_state != State.COOLING:
-                            self._append_event("stage_started", "Safe cool down started", now)
                 elif name == "emergency":
+                    self._manual_override_active = False
                     self.controller.emergency_stop(value)
                     self._append_event("emergency_stop", "Emergency stop activated", now, reason=str(value))
                 elif name == "reset":
+                    self._manual_override_active = False
                     self.controller.reset(now, temperature, age, self.hw.estop())
                     self._run_started_monotonic = None
                     self._event_log_closed = True
@@ -239,9 +306,30 @@ class Application:
                             "last_change": now,
                         }
                 elif name == "open":
-                    if self.controller.state in (State.READY, State.COMPLETE) and self.controller.safety.door_may_open(temperature): self.hw.motor.open(now)
+                    if self.controller.active and self.controller.state != State.PAUSED:
+                        self.controller.pause(now, "Door opened by operator")
+                    self._manual_override_active = True
+                    self.hw.motor.open(now)
                 elif name == "close":
-                    if self.controller.state in (State.READY, State.COMPLETE): self.hw.motor.close_door(now)
+                    if self.controller.active and self.controller.state != State.PAUSED:
+                        raise RuntimeError("Manual door controls are unavailable during a run")
+                    self._manual_override_active = True
+                    self.hw.motor.close_door(now)
+                elif name == "read_temperature":
+                    self.hw.sensor.update(now)
+                    self._current_temperature_c = self.hw.sensor.temperature()
+                    self._sensor_age_s = self.hw.sensor.seconds_since_valid(now)
+                elif name == "heater_on":
+                    if self.controller.active:
+                        raise RuntimeError("Manual heating is unavailable during a run")
+                    self._manual_override_active = True
+                    self.hw.heater.unlock()
+                    self.hw.heater.set_percent(100.0)
+                elif name == "heater_off":
+                    if self.controller.active:
+                        self.controller.pause(now, "Stopped by operator")
+                    self._manual_override_active = True
+                    self.hw.heater.off()
             except (ValueError, RuntimeError, KeyError) as exc:
                 with self._lock: self._error = str(exc)
     def _run(self):
@@ -255,9 +343,12 @@ class Application:
                 self.hw.sensor.update(now)
                 temperature = self.hw.sensor.temperature()
                 age = self.hw.sensor.seconds_since_valid(now)
+                self._current_temperature_c = temperature
+                self._sensor_age_s = age
+                self._estop_active = self.hw.estop()
                 self.hw.motor.update(now)
                 self._apply_commands(now, temperature, age)
-                if self.controller.active and temperature is not None:
+                if self.controller.active and self.controller.state != State.PAUSED and temperature is not None:
                     elapsed = max(0.0, now - self.controller.run_started)
                     sample = {"elapsed_s": elapsed, "temperature_c": temperature,
                         "target_temperature_c": self.controller.target, "heater_output_percent": self.hw.heater.percent,
@@ -266,7 +357,8 @@ class Application:
                 control_due = now >= next_control
                 if control_due: next_control = now + self.config.LOOP_PERIOD_S
                 before_state = self.controller.state
-                self.controller.step(now, temperature, age, self.hw.estop(), control_due)
+                if not self._manual_override_active:
+                    self.controller.step(now, temperature, age, self._estop_active, control_due)
                 door_state = self.hw.switches.state().value
                 if door_state != self._last_door_state and self._run_started_monotonic is not None:
                     event_type = "door_opened" if door_state == "open" else "door_closed"
@@ -287,6 +379,10 @@ class Application:
             self.controller.emergency_stop(f"worker_error: {exc}")
             self._publish(str(exc))
         finally:
+            if self.controller.active and self.controller.state != State.PAUSED:
+                self.controller.pause(time.monotonic(), "Application closed; run paused")
+            if self.controller.state == State.PAUSED:
+                self._publish()
             self.hw.heater.emergency_off()
             self.hw.motor.stop()
             self.hw.close()

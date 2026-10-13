@@ -12,6 +12,7 @@ class State(Enum):
     HEATING = "heating"
     HOLDING = "holding"
     COOLING = "cooling"
+    PAUSED = "paused"
     COMPLETE = "complete"
     ABORTED = "aborted"
     FAULT = "fault"
@@ -27,6 +28,9 @@ class Controller:
         self.run_started_at = None
         self.run_settings = {}
         self.hold_reached_s = self.cooling_started = self.cooldown_s = None
+        self.hold_elapsed_s = 0.0
+        self.resume_state = None
+        self.resume_to_hold = False
         self.stop_state = self.stop_elapsed_s = self.stop_stage = None
         self.stop_fraction = None
         self.stop_detail = None
@@ -41,7 +45,7 @@ class Controller:
         self.hold_completed = False
         self.peak_tracker = PeakTracker()
     @property
-    def active(self): return self.state in (State.DOOR_MOVING, State.HEATING, State.HOLDING, State.COOLING)
+    def active(self): return self.state in (State.DOOR_MOVING, State.HEATING, State.HOLDING, State.COOLING, State.PAUSED)
     def start(self, now, target, hold_s, gains, temperature):
         if self.active: return
         if self.state not in (State.READY, State.COMPLETE, State.ABORTED): raise RuntimeError("Reset the safety fault before starting another run")
@@ -54,6 +58,9 @@ class Controller:
         self.run_settings = {"target_temperature_c": self.target, "hold_duration_s": self.hold_s,
             "kp": self.gains[0], "ki": self.gains[1], "kd": self.gains[2]}
         self.hold_reached_s = self.cooling_started = self.cooldown_s = None
+        self.hold_elapsed_s = 0.0
+        self.resume_state = None
+        self.resume_to_hold = False
         self.stop_state = self.stop_elapsed_s = self.stop_stage = None
         self.stop_fraction = self.stop_detail = None
         self.last_pid_time = None
@@ -75,20 +82,51 @@ class Controller:
         self.hw.tower.show(state.value)
         if state in (State.HEATING, State.READY): self.pid.reset()
     def stop(self, now):
-        if self.active:
-            if self.stop_state is None:
-                stages = {State.DOOR_MOVING: 1, State.HEATING: 1, State.HOLDING: 2, State.COOLING: 3}
-                self.stop_state = self.state.value
-                self.stop_elapsed_s = max(0.0, now - self.run_started)
-                self.stop_stage = stages[self.state]
-                self.stop_fraction = 0.0 if self.state == State.COOLING else self.progress_fraction
-                self.stop_detail = "Cooling was in progress" if self.state == State.COOLING else self.progress_detail
-            self.completion_allowed = False
-            self.hw.heater.off()
-            self.cooling_started = now if self.cooling_started is None else self.cooling_started
-            self.progress_fraction = 0.0
-            self.progress_detail = "Cooling to safe temperature"
-            self._set_state(State.COOLING, "Stopped; cooling to safe temperature")
+        self.pause(now, "Stopped by operator")
+
+    def pause(self, now, reason="Door opened"):
+        if self.state in (State.PAUSED, State.READY, State.COMPLETE, State.ABORTED, State.FAULT, State.E_STOP):
+            return
+        stages = {State.DOOR_MOVING: 1, State.HEATING: 1, State.HOLDING: 2, State.COOLING: 3}
+        self.resume_state = self.state
+        if self.state == State.HOLDING and self.hold_started is not None:
+            self.hold_elapsed_s += max(0.0, now - self.hold_started)
+            self.hold_started = None
+        self.stop_state = self.state.value
+        self.stop_elapsed_s = max(0.0, now - self.run_started)
+        self.stop_stage = stages[self.state]
+        self.stop_fraction = self.progress_fraction
+        self.stop_detail = reason
+        self.last_step = now
+        self.hw.heater.off()
+        self.hw.motor.stop()
+        self.stable_since = None
+        self.last_pid_time = None
+        self._set_state(State.PAUSED, f"{reason}; press Run to resume")
+
+    def resume(self, now, temperature):
+        if self.state != State.PAUSED:
+            raise RuntimeError("There is no paused run to resume")
+        if self.hw.switches.state() != DoorState.CLOSED:
+            raise RuntimeError("Close the door before resuming")
+        if temperature is None:
+            raise RuntimeError("Waiting for a valid temperature reading")
+        previous = self.resume_state or State.HEATING
+        self.pid.reset()
+        self.last_pid_time = None
+        self.stable_since = None
+        if previous == State.COOLING:
+            self._set_state(State.COOLING, "Resuming cool down")
+        elif previous == State.HOLDING:
+            if abs(temperature - self.target) <= self.config.STABLE_TOLERANCE:
+                self.hold_started = now
+                self._set_state(State.HOLDING, "Resuming hold")
+            else:
+                self.resume_to_hold = True
+                self._set_state(State.HEATING, "Reheating to resume hold")
+        else:
+            self._set_state(State.HEATING, "Resuming warm up")
+        self.resume_state = None
     def emergency_stop(self, reason="emergency_stop"):
         self.hw.heater.emergency_off(); self.hw.motor.stop()
         self.fault_reason = reason
@@ -107,12 +145,15 @@ class Controller:
     def step(self, now, temperature, age_s, estop, control_due=True):
         door = self.hw.switches.state()
         fault = self.safety.check(temperature, age_s, door, self.hw.motor.fault_reason,
-            self.state in (State.HEATING, State.HOLDING), estop)
+            False, estop)
         if fault:
             if fault == "emergency_stop": self.emergency_stop()
             elif self.state not in (State.FAULT, State.E_STOP): self._fault(fault)
             return
-        if self.state in (State.FAULT, State.E_STOP, State.COMPLETE, State.ABORTED): return
+        if self.state in (State.HEATING, State.HOLDING) and door != DoorState.CLOSED:
+            self.pause(now)
+            return
+        if self.state in (State.FAULT, State.E_STOP, State.COMPLETE, State.ABORTED, State.PAUSED): return
         if temperature is not None and self.run_started is not None:
             elapsed = now - self.run_started
             self.peak_tracker.update(temperature, elapsed)
@@ -137,16 +178,22 @@ class Controller:
                     self.progress_fraction = min(1.0, held/self.config.STABLE_TIME_S)
                     self.progress_detail = f"Stable {held:.0f}/{self.config.STABLE_TIME_S:.0f} s"
                     if held >= self.config.STABLE_TIME_S:
-                        self.hold_started = now; self.hold_reached_s = now-self.run_started; self.hold_min, self.hold_min_time = temperature, now-self.run_started
+                        self.hold_started = now
+                        if not self.resume_to_hold:
+                            self.hold_elapsed_s = 0.0
+                            self.hold_reached_s = now-self.run_started
+                        self.resume_to_hold = False
+                        self.hold_min, self.hold_min_time = temperature, now-self.run_started
                         self._set_state(State.HOLDING, "Holding target")
                 else: self.stable_since, self.progress_fraction, self.progress_detail = None, 0.0, ""
             else:
-                elapsed = now-self.hold_started
+                elapsed = self.hold_elapsed_s + (now-self.hold_started)
                 if self.hold_min is None or temperature < self.hold_min:
                     self.hold_min, self.hold_min_time = temperature, now-self.run_started
                 self.progress_fraction = min(1.0, elapsed/self.hold_s)
                 self.progress_detail = f"{max(0.0,self.hold_s-elapsed):.0f} s remaining"
                 if elapsed >= self.hold_s:
+                    self.hold_elapsed_s = elapsed
                     self.hold_completed = True
                     self.cooling_started = now
                     self.hw.heater.off(); self._set_state(State.COOLING, "Cooling down")
@@ -164,14 +211,19 @@ class Controller:
                         self._set_state(State.ABORTED, f"Stopped during {stopped_during}; cooldown complete")
         self.hw.tower.show(self.state.value)
     def snapshot_fields(self):
-        stage = {State.READY:0,State.COMPLETE:4,State.ABORTED:(self.stop_stage or 0),State.FAULT:0,State.E_STOP:0,
+        stage = {State.READY:0,State.COMPLETE:4,State.ABORTED:(self.stop_stage or 0),State.PAUSED:(self.stop_stage or 0),State.FAULT:0,State.E_STOP:0,
             State.DOOR_MOVING:1,State.HEATING:1,State.HOLDING:2,State.COOLING:3}[self.state]
         elapsed = 0.0 if self.run_started is None else max(0.0, (self.last_step if self.run_ended is None else self.run_ended)-self.run_started)
-        fraction = self.stop_fraction if self.state == State.ABORTED and self.stop_fraction is not None else self.progress_fraction
-        detail = self.stop_detail if self.state == State.ABORTED and self.stop_detail is not None else self.progress_detail
+        stopped = self.state in (State.PAUSED, State.ABORTED)
+        fraction = self.stop_fraction if stopped and self.stop_fraction is not None else self.progress_fraction
+        detail = self.stop_detail if stopped and self.stop_detail is not None else self.progress_detail
         if self.state in (State.FAULT,State.E_STOP): detail = self.fault_reason
+        held_s = self.hold_elapsed_s
+        if self.state == State.HOLDING and self.hold_started is not None:
+            held_s += max(0.0, (self.last_step or self.hold_started) - self.hold_started)
         return (self.active, stage, fraction, detail, self.status_text, elapsed,
             self.target, self.hw.heater.percent, self.hw.switches.state().value, self.state.value,
             self.peak_time, self.peak_temp, self.hold_min_time, self.hold_min, self.hold_completed,
             self.run_started_at, self.run_settings, self.hold_reached_s, self.cooldown_s,
-            self.stop_state, self.stop_elapsed_s, self.stop_stage, self.stop_fraction, self.stop_detail)
+            self.stop_state, self.stop_elapsed_s, self.stop_stage, self.stop_fraction, self.stop_detail,
+            held_s)

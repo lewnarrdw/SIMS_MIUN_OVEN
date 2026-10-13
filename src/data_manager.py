@@ -20,9 +20,10 @@ class DataManager:
 
     @classmethod
     def build_run_record(cls, view, samples):
-        progress = {"stage": view.stop_stage if view.state == "aborted" and view.stop_stage is not None else view.stage,
-            "fraction": view.stop_fraction if view.state == "aborted" and view.stop_fraction is not None else view.fraction,
-            "detail": view.stop_detail if view.state == "aborted" and view.stop_detail is not None else view.detail}
+        stopped = view.state in ("paused", "aborted")
+        progress = {"stage": view.stop_stage if stopped and view.stop_stage is not None else view.stage,
+            "fraction": view.stop_fraction if stopped and view.stop_fraction is not None else view.fraction,
+            "detail": view.stop_detail if stopped and view.stop_detail is not None else view.detail}
         return {
             "schema_version": cls.RUN_VERSION,
             "started_at": view.run_started_at,
@@ -31,7 +32,7 @@ class DataManager:
                 "reason": view.error or (view.detail if view.state in ("fault", "e_stop") else ""),
                 "hold_reached_s": view.hold_reached_s, "cooldown_s": view.cooldown_s,
                 "hold_completed": view.hold_completed, "stop_state": view.stop_state,
-                "stop_elapsed_s": view.stop_elapsed_s},
+                "stop_elapsed_s": view.stop_elapsed_s, "hold_elapsed_s": view.hold_elapsed_s},
             "progress": progress,
             "events": [dict(event) for event in getattr(view, "events", ())],
             "metrics": {
@@ -81,7 +82,7 @@ class DataManager:
                 raise ValueError("Run file contains invalid outcome details")
             if not 0 <= progress["stage"] <= 4 or not 0.0 <= progress["fraction"] <= 1.0:
                 raise ValueError("Run file contains invalid progress values")
-            if result.get("state") not in {"complete", "aborted", "fault", "e_stop"}:
+            if result.get("state") not in {"complete", "paused", "aborted", "fault", "e_stop"}:
                 raise ValueError("Run file contains an invalid terminal state")
             previous_elapsed = -1.0
             for sample in samples:

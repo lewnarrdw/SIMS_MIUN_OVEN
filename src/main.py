@@ -32,6 +32,9 @@ class _ImportPreviewService:
     def command(self, _name, _values=None):
         return None
 
+    def emergency_stop(self):
+        return None
+
     def close(self):
         return None
 
@@ -72,6 +75,10 @@ class KilnWindow(gui.OvenWindow):
         self.service.command("settings", self._settings())
 
     def start_process(self):
+        view, _samples = self.service.snapshot()
+        if view.state == "paused":
+            self.service.command("start")
+            return
         self._historical_record = None
         self._last_run_record = None
         self._clear_temperature_markers()
@@ -118,6 +125,8 @@ class KilnWindow(gui.OvenWindow):
                 peak_c=peak.get("temperature_c"), hold_min_time_s=low.get("elapsed_s"),
                 hold_min_c=low.get("temperature_c"), hold_completed=result.get("hold_completed", False),
                 hold_reached_s=result.get("hold_reached_s"), cooldown_s=result.get("cooldown_s"),
+                hold_elapsed_s=result.get("hold_elapsed_s", 0.0),
+                run_settings=record["settings"],
                 stop_state=result.get("stop_state"), stop_elapsed_s=result.get("stop_elapsed_s"),
                 error=result.get("reason", ""), events=tuple(record.get("events", ())),
             )
@@ -149,13 +158,31 @@ class KilnWindow(gui.OvenWindow):
             self.temperature_curve.setData([], [])
             self.goal_curve.setData([], [])
             self.duty_curve.setData([], [])
-        self.progress.set_progress(view.stage, view.fraction, view.detail)
-        self.stage_label.setText(f"Current stage: {view.status}")
+        state = view.state
+        self.run_action.setText("Resume" if state == "paused" else "Run")
+        self.run_action.setToolTip("Resume the paused run" if state == "paused" else "Start a new run")
+        progress_stage = {"door_moving": 1, "heating": 1, "holding": 2, "cooling": 3,
+                          "paused": getattr(view, "stop_stage", None) or 1,
+                          "complete": 4}.get(state, 0)
+        if state == "aborted":
+            progress_stage = getattr(view, "stop_stage", None) or 1
+        self.progress.set_progress(progress_stage, view.fraction, view.detail)
+        titles = {"ready": "Ready to run", "door_moving": "Closing door", "heating": "Warming up",
+                  "holding": "Holding", "cooling": "Cooling down", "paused": "Paused",
+                  "complete": "Complete", "aborted": "Stopped", "fault": "Fault", "e_stop": "Emergency stop"}
+        self.stage_label.setText("Current stage: " + titles.get(state, view.status))
+        temperature = getattr(view, "current_temperature_c", None)
+        if temperature is None and samples:
+            temperature = samples[-1]["temperature_c"]
+
         minutes, seconds = divmod(view.elapsed_s, 60.0)
         self.elapsed_label.setText(f"Elapsed: {int(minutes):02d}:{seconds:04.1f}")
-        temp_text = "-- °C" if not samples else f"{samples[-1]['temperature_c']:.2f} °C"
-        self.temperature_label.setText(f"Temperature: {temp_text}    Output: {view.output_percent:.1f}%")
-        self.door_label.setText(f"Door: {view.door.title()}")
+        temp_text = "N/A" if temperature is None else f"{temperature:.2f} °C"
+        output = getattr(view, "output_percent", None)
+        output_text = "N/A" if output is None else f"{output:.1f}%"
+        self.temperature_label.setText(f"Temperature: {temp_text}    Output: {output_text}")
+        door_text = "N/A" if not view.door or view.door == "unknown" else view.door.title()
+        self.door_label.setText(f"Door: {door_text}")
         color = "#4caf70" if view.door == "closed" else "#f4b942"
         self.door_label.setStyleSheet(f"color: {color};")
         for widget in (self.target_input, self.hold_input, self.restore_process_button):

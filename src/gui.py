@@ -121,7 +121,7 @@ class UnhighlightedDoubleSpinBox(QtWidgets.QDoubleSpinBox):
         self.lineEdit().deselect()
 
 class OvenWindow(QtWidgets.QMainWindow):
-    """Oven controller window; actions are placeholders for future wiring."""
+    """Oven controller window."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -210,6 +210,8 @@ class OvenWindow(QtWidgets.QMainWindow):
                 toolbar.addSeparator()
                 continue
             action = QtGui.QAction(label, self)
+            if label == "Run":
+                self.run_action = action
             action.setIcon(self._toolbar_icon(icon_name, accent))
             action.setToolTip({
                 "Import": "Import process settings",
@@ -219,6 +221,7 @@ class OvenWindow(QtWidgets.QMainWindow):
             action.setStatusTip(action.toolTip())
             action.triggered.connect(callback)
             toolbar.addAction(action)
+
 
     @staticmethod
     def _toolbar_icon(symbol: str, accent: str) -> QtGui.QIcon:
@@ -343,6 +346,8 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.graph_item.vb.sigResized.connect(self._resize_duty_view)
         self.temperature_curve = self.graph.plot(name="Temperature", pen=pg.mkPen("#ff7566", width=3))
         self.temperature_marker_items: list[pg.GraphicsObject] = []
+        self._temperature_marker_points: list[tuple[float, float]] = []
+        self._temperature_marker_connectors: list[pg.PlotDataItem] = []
         self.goal_curve = self.graph.plot(name="Goal", pen=pg.mkPen((255, 209, 102, 160), width=3, style=QtCore.Qt.PenStyle.DashLine))
         self.duty_curve = pg.PlotCurveItem(pen=pg.mkPen("#63a8e8", width=3))
         self.duty_view.addItem(self.duty_curve)
@@ -414,9 +419,11 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def _clear_temperature_markers(self) -> None:
         """Remove annotations from the previous run."""
-        for item in self.temperature_marker_items:
+        for item in (*self.temperature_marker_items, *self._temperature_marker_connectors):
             self.graph.removeItem(item)
         self.temperature_marker_items.clear()
+        self._temperature_marker_points.clear()
+        self._temperature_marker_connectors.clear()
 
     def _add_temperature_marker(
         self,
@@ -444,31 +451,66 @@ class OvenWindow(QtWidgets.QMainWindow):
         annotation.setPos(elapsed_s, temperature_c)
         self.graph.addItem(marker)
         self.graph.addItem(annotation)
-        self._fit_temperature_annotation(annotation)
+        connector = pg.PlotDataItem(pen=pg.mkPen(color, width=1, style=QtCore.Qt.PenStyle.DotLine))
+        self.graph.addItem(connector)
         self.temperature_marker_items.extend((marker, annotation))
+        self._temperature_marker_points.append((elapsed_s, temperature_c))
+        self._temperature_marker_connectors.append(connector)
+        self._layout_temperature_markers()
 
-    def _fit_temperature_annotation(self, annotation: pg.TextItem) -> None:
-        """Flip marker text inward when its preferred placement crosses the plot edge."""
+    def _layout_temperature_markers(self) -> None:
+        """Separate end-of-run markers and labels in screen space."""
         bounds = self.graph_item.vb.sceneBoundingRect().adjusted(8, 8, -8, -8)
-        anchor_x, anchor_y = 0.0, 1.0
-        annotation.setAnchor((anchor_x, anchor_y))
-        label_bounds = annotation.mapRectToScene(annotation.boundingRect())
-        if label_bounds.right() > bounds.right():
-            anchor_x = 1.0
-        elif label_bounds.left() < bounds.left():
-            anchor_x = 0.0
-        annotation.setAnchor((anchor_x, anchor_y))
-        label_bounds = annotation.mapRectToScene(annotation.boundingRect())
-        if label_bounds.top() < bounds.top():
-            anchor_y = 0.0
-        elif label_bounds.bottom() > bounds.bottom():
-            anchor_y = 1.0
-        annotation.setAnchor((anchor_x, anchor_y))
+        view = self.graph_item.vb
+        occupied_labels: list[QtCore.QRectF] = []
+        occupied_markers: list[QtCore.QPointF] = []
+        candidates = ((12, -12, 0.0, 1.0), (-12, -12, 1.0, 1.0),
+                      (12, 12, 0.0, 0.0), (-12, 12, 1.0, 0.0),
+                      (18, -30, 0.0, 1.0), (-18, -30, 1.0, 1.0),
+                      (18, 30, 0.0, 0.0), (-18, 30, 1.0, 0.0),
+                      (0, -42, 0.5, 1.0), (0, 42, 0.5, 0.0))
+
+        for index, (marker, annotation) in enumerate(zip(
+            self.temperature_marker_items[::2],
+            self.temperature_marker_items[1::2],
+        )):
+            data_point = QtCore.QPointF(*self._temperature_marker_points[index])
+            scene_point = view.mapViewToScene(data_point)
+            marker_candidates = [QtCore.QPointF(scene_point.x() + dx, scene_point.y() + dy)
+                                 for dx, dy in ((0, 0), (11, 0), (-11, 0), (0, 11),
+                                                (0, -11), (16, 16), (-16, 16),
+                                                (16, -16), (-16, -16))]
+            marker_scene = next((point for point in marker_candidates
+                                 if bounds.contains(point) and all(
+                                     math.hypot(point.x() - prior.x(), point.y() - prior.y()) >= 13
+                                     for prior in occupied_markers)), marker_candidates[0])
+            occupied_markers.append(marker_scene)
+            marker_data = view.mapSceneToView(marker_scene)
+            marker.setData([marker_data.x()], [marker_data.y()])
+            self._temperature_marker_connectors[index].setData(
+                [self._temperature_marker_points[index][0], marker_data.x()],
+                [self._temperature_marker_points[index][1], marker_data.y()],
+            )
+
+            for dx, dy, anchor_x, anchor_y in candidates:
+                annotation.setAnchor((anchor_x, anchor_y))
+                label_data = view.mapSceneToView(marker_scene + QtCore.QPointF(dx, dy))
+                annotation.setPos(label_data.x(), label_data.y())
+                rect = annotation.mapRectToScene(annotation.boundingRect())
+                if (bounds.contains(rect) and all(not rect.intersects(other.adjusted(-3, -3, 3, 3))
+                                                  for other in occupied_labels)):
+                    occupied_labels.append(rect)
+                    break
+            else:
+                annotation.setAnchor((0.5, 1.0))
+                label_data = view.mapSceneToView(marker_scene + QtCore.QPointF(0, -48))
+                annotation.setPos(label_data.x(), label_data.y())
+                occupied_labels.append(annotation.mapRectToScene(annotation.boundingRect()))
 
     def _fit_visible_temperature_annotations(self, *_args) -> None:
         """Reposition marker text as the plot is panned, zoomed, or resized."""
-        for annotation in self.temperature_marker_items[1::2]:
-            self._fit_temperature_annotation(annotation)
+        if self.temperature_marker_items:
+            self._layout_temperature_markers()
 
     def show_peak_temperature_marker(
         self,
