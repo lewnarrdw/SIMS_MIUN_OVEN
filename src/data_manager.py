@@ -1,727 +1,142 @@
-# Den sköter all datahantering. 
-# Run ID
-# Verklig tid
-# Elapsed time
-# Temperature
-# Target temperature
-# Heater output
-# setting JSON  
-from datetime import datetime, timedelta
-from pathlib import Path
+﻿"""Portable storage for complete kiln runs and reusable settings."""
+from __future__ import annotations
+import csv
 import json
-
-from openpyxl import Workbook, load_workbook
+import math
+from datetime import datetime
+from pathlib import Path
 
 
 class DataManager:
-
-    MASTER_LOG_SHEET = "Oven Log"
-    MASTER_INFO_SHEET = "Run Info"
-    ERROR_SHEET = "Errors"
-
-    def __init__(self, master_file):
-
-        self.master_file = Path(master_file)
-
-        self.master_file.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        self._create_master_file()
-
-
-    # =====================================================
-    # RUN ID
-    # =====================================================
-
-    @staticmethod
-    def new_run_id():
-
-        return datetime.now().strftime(
-            "%Y%m%d-%H%M%S-%f"
-        )
-
-
-    # =====================================================
-    # CREATE MASTER EXCEL
-    # =====================================================
-
-    def _create_master_file(self):
-
-        if self.master_file.exists():
-
-            workbook = load_workbook(
-                self.master_file
-            )
-
-        else:
-
-            workbook = Workbook()
-
-            sheet = workbook.active
-            sheet.title = self.MASTER_LOG_SHEET
-
-
-        # -------------------------------------------------
-        # OVEN LOG
-        # -------------------------------------------------
-
-        if self.MASTER_LOG_SHEET not in workbook.sheetnames:
-
-            sheet = workbook.create_sheet(
-                self.MASTER_LOG_SHEET
-            )
-
-        else:
-
-            sheet = workbook[
-                self.MASTER_LOG_SHEET
-            ]
-
-
-        if sheet["A1"].value is None:
-
-            sheet.append([
-                "Run ID",
-                "Time",
-                "Elapsed (s)",
-                "Temperature (°C)",
-                "Target (°C)",
-                "Heater output (%)"
-            ])
-
-
-        # -------------------------------------------------
-        # RUN INFO
-        # -------------------------------------------------
-
-        if self.MASTER_INFO_SHEET not in workbook.sheetnames:
-
-            info_sheet = workbook.create_sheet(
-                self.MASTER_INFO_SHEET
-            )
-
-            info_sheet.append([
-                "Run ID",
-                "Start time",
-                "Status",
-                "Target (°C)",
-                "Hold (s)",
-                "Kp",
-                "Ki",
-                "Kd"
-            ])
-
-
-        # -------------------------------------------------
-        # ERRORS
-        # -------------------------------------------------
-
-        if self.ERROR_SHEET not in workbook.sheetnames:
-
-            error_sheet = workbook.create_sheet(
-                self.ERROR_SHEET
-            )
-
-            error_sheet.append([
-                "Time",
-                "Run ID",
-                "Elapsed (s)",
-                "Temperature (°C)",
-                "Error code",
-                "Message"
-            ])
-
-
-        workbook.save(
-            self.master_file
-        )
-
-
-    # =====================================================
-    # CHECK RUN DATA
-    # =====================================================
-
-    @staticmethod
-    def _prepare_run_data(
-        times,
-        temperatures,
-        targets,
-        heater_outputs
-    ):
-
-        times = list(times)
-        temperatures = list(temperatures)
-        targets = list(targets)
-        heater_outputs = list(heater_outputs)
-
-
-        if not times:
-
-            raise ValueError(
-                "There is no run data."
-            )
-
-
-        if not (
-            len(times)
-            == len(temperatures)
-            == len(targets)
-            == len(heater_outputs)
-        ):
-
-            raise ValueError(
-                "Run data does not have equal lengths."
-            )
-
-
-        return (
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        )
-
-
-    # =====================================================
-    # SAVE RUN TO MASTER FILE
-    # =====================================================
-
-    def save_run_to_master(
-        self,
-        run_id,
-        times,
-        temperatures,
-        targets,
-        heater_outputs,
-        settings,
-        status
-    ):
-
-        (
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        ) = self._prepare_run_data(
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        )
-
-
-        workbook = load_workbook(
-            self.master_file
-        )
-
-
-        log_sheet = workbook[
-            self.MASTER_LOG_SHEET
-        ]
-
-
-        info_sheet = workbook[
-            self.MASTER_INFO_SHEET
-        ]
-
-
-        end_time = datetime.now()
-
-        total_elapsed = float(
-            times[-1]
-        )
-
-        start_time = (
-            end_time
-            - timedelta(
-                seconds=total_elapsed
-            )
-        )
-
-
-        # Measurement data
-
-        for (
-            elapsed,
-            temperature,
-            target,
-            output
-        ) in zip(
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        ):
-
-            measurement_time = (
-                start_time
-                + timedelta(
-                    seconds=float(elapsed)
-                )
-            )
-
-
-            log_sheet.append([
-                run_id,
-
-                measurement_time.strftime(
-                    "%Y-%m-%d %H:%M:%S.%f"
-                )[:-3],
-
-                round(float(elapsed), 2),
-
-                round(float(temperature), 2),
-
-                round(float(target), 2),
-
-                round(float(output), 1)
-            ])
-
-
-        # PID + run information
-
-        info_sheet.append([
-            run_id,
-
-            start_time.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-
-            status,
-
-            settings[
-                "target_temperature_c"
-            ],
-
-            settings[
-                "hold_duration_s"
-            ],
-
-            settings["kp"],
-
-            settings["ki"],
-
-            settings["kd"]
-        ])
-
-
-        workbook.save(
-            self.master_file
-        )
-
-
-    # =====================================================
-    # EXPORT ONE RUN
-    # =====================================================
-
-    def export_run(
-        self,
-        path,
-        run_id,
-        times,
-        temperatures,
-        targets,
-        heater_outputs,
-        settings,
-        status
-    ):
-
-        (
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        ) = self._prepare_run_data(
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        )
-
-
-        path = Path(path)
-
-        if path.suffix.lower() != ".xlsx":
-
-            path = path.with_suffix(
-                ".xlsx"
-            )
-
-
-        workbook = Workbook()
-
-
-        # =================================================
-        # SHEET 1: GRAPH DATA
-        # =================================================
-
-        data_sheet = workbook.active
-
-        data_sheet.title = "Run Data"
-
-
-        data_sheet.append([
-            "Elapsed (s)",
-            "Temperature (°C)",
-            "Target (°C)",
-            "Heater output (%)"
-        ])
-
-
-        for (
-            elapsed,
-            temperature,
-            target,
-            output
-        ) in zip(
-            times,
-            temperatures,
-            targets,
-            heater_outputs
-        ):
-
-            data_sheet.append([
-                round(float(elapsed), 2),
-                round(float(temperature), 2),
-                round(float(target), 2),
-                round(float(output), 1)
-            ])
-
-
-        # =================================================
-        # SHEET 2: PID + SETTINGS
-        # =================================================
-
-        info_sheet = workbook.create_sheet(
-            "Run Info"
-        )
-
-
-        info_sheet.append([
-            "Setting",
-            "Value"
-        ])
-
-
-        info_sheet.append([
-            "Run ID",
-            run_id
-        ])
-
-
-        info_sheet.append([
-            "Exported at",
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        ])
-
-
-        info_sheet.append([
-            "Status",
-            status
-        ])
-
-
-        info_sheet.append([
-            "Target temperature",
-            settings[
-                "target_temperature_c"
-            ]
-        ])
-
-
-        info_sheet.append([
-            "Hold duration",
-            settings[
-                "hold_duration_s"
-            ]
-        ])
-
-
-        info_sheet.append([
-            "Kp",
-            settings["kp"]
-        ])
-
-
-        info_sheet.append([
-            "Ki",
-            settings["ki"]
-        ])
-
-
-        info_sheet.append([
-            "Kd",
-            settings["kd"]
-        ])
-
-
-        workbook.save(
-            path
-        )
-
-
-    # =====================================================
-    # IMPORT OLD RUN
-    # =====================================================
-
-    def import_run(self, path):
-
-        workbook = load_workbook(
-            path,
-            data_only=True
-        )
-
-
-        if "Run Data" not in workbook.sheetnames:
-
-            raise ValueError(
-                "Run Data sheet was not found."
-            )
-
-
-        if "Run Info" not in workbook.sheetnames:
-
-            raise ValueError(
-                "Run Info sheet was not found."
-            )
-
-
-        data_sheet = workbook[
-            "Run Data"
-        ]
-
-
-        times = []
-        temperatures = []
-        targets = []
-        heater_outputs = []
-
-
-        for row in data_sheet.iter_rows(
-            min_row=2,
-            values_only=True
-        ):
-
-            if not row or all(
-                value is None
-                for value in row
-            ):
-                continue
-
-
-            times.append(
-                float(row[0])
-            )
-
-            temperatures.append(
-                float(row[1])
-            )
-
-            targets.append(
-                float(row[2])
-            )
-
-            heater_outputs.append(
-                float(row[3])
-            )
-
-
-        if not times:
-
-            raise ValueError(
-                "The imported run contains no data."
-            )
-
-
-        # -------------------------------------------------
-        # PID INFORMATION
-        # -------------------------------------------------
-
-        info_sheet = workbook[
-            "Run Info"
-        ]
-
-
-        information = {}
-
-
-        for row in info_sheet.iter_rows(
-            min_row=2,
-            values_only=True
-        ):
-
-            key = row[0]
-            value = row[1]
-
-
-            if key is not None:
-
-                information[
-                    str(key)
-                ] = value
-
-
-        required = [
-            "Target temperature",
-            "Hold duration",
-            "Kp",
-            "Ki",
-            "Kd"
-        ]
-
-
-        for key in required:
-
-            if key not in information:
-
-                raise ValueError(
-                    f"Missing value: {key}"
-                )
-
-
+    RUN_VERSION = 1
+    SAMPLE_FIELDS = (
+        "elapsed_s", "temperature_c", "target_temperature_c",
+        "heater_output_percent", "kp", "ki", "kd",
+    )
+    SETTING_FIELDS = ("target_temperature_c", "hold_duration_s", "kp", "ki", "kd")
+
+    def __init__(self, directory):
+        self.directory = Path(directory)
+
+    @classmethod
+    def build_run_record(cls, view, samples):
+        progress = {"stage": view.stop_stage if view.state == "aborted" and view.stop_stage is not None else view.stage,
+            "fraction": view.stop_fraction if view.state == "aborted" and view.stop_fraction is not None else view.fraction,
+            "detail": view.stop_detail if view.state == "aborted" and view.stop_detail is not None else view.detail}
         return {
-
-            "run_id":
-                str(
-                    information.get(
-                        "Run ID",
-                        "Imported"
-                    )
-                ),
-
-            "times":
-                times,
-
-            "temperatures":
-                temperatures,
-
-            "targets":
-                targets,
-
-            "heater_outputs":
-                heater_outputs,
-
-            "target_temperature_c":
-                float(
-                    information[
-                        "Target temperature"
-                    ]
-                ),
-
-            "hold_duration_s":
-                float(
-                    information[
-                        "Hold duration"
-                    ]
-                ),
-
-            "kp":
-                float(
-                    information["Kp"]
-                ),
-
-            "ki":
-                float(
-                    information["Ki"]
-                ),
-
-            "kd":
-                float(
-                    information["Kd"]
-                ),
-
-            "status":
-                str(
-                    information.get(
-                        "Status",
-                        "Imported"
-                    )
-                )
+            "schema_version": cls.RUN_VERSION,
+            "started_at": view.run_started_at,
+            "settings": dict(view.run_settings or {}),
+            "result": {"state": view.state, "status": view.status, "duration_s": view.elapsed_s,
+                "reason": view.error or (view.detail if view.state in ("fault", "e_stop") else ""),
+                "hold_reached_s": view.hold_reached_s, "cooldown_s": view.cooldown_s,
+                "hold_completed": view.hold_completed, "stop_state": view.stop_state,
+                "stop_elapsed_s": view.stop_elapsed_s},
+            "progress": progress,
+            "events": [dict(event) for event in getattr(view, "events", ())],
+            "metrics": {
+                "peak": None if view.peak_c is None else {"temperature_c": view.peak_c, "elapsed_s": view.peak_time_s},
+                "hold_minimum": None if view.hold_min_c is None else {"temperature_c": view.hold_min_c, "elapsed_s": view.hold_min_time_s},
+            },
+            "samples": list(samples),
         }
 
+    def export_run(self, record, path=None):
+        if path is None:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            path = self.directory / f"kiln-run-{stamp}.json"
+        path = Path(path).with_suffix(".json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as stream:
+            json.dump(record, stream, indent=2, allow_nan=False)
+            stream.write("\n")
+        return path
 
-    # =====================================================
-    # ERROR LOG
-    # =====================================================
-
-    def log_error(
-        self,
-        run_id,
-        elapsed,
-        temperature,
-        error_code,
-        message
-    ):
-
-        workbook = load_workbook(
-            self.master_file
-        )
-
-
-        sheet = workbook[
-            self.ERROR_SHEET
-        ]
-
-
-        sheet.append([
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-
-            run_id,
-
-            round(float(elapsed), 2),
-
-            round(float(temperature), 2),
-
-            error_code,
-
-            message
-        ])
-
-
-        workbook.save(
-            self.master_file
-        )
-
-
-    # =====================================================
-    # JSON SETTINGS
-    # =====================================================
+    @classmethod
+    def import_run(cls, path):
+        with Path(path).open(encoding="utf-8-sig") as stream:
+            record = json.load(stream)
+        if not isinstance(record, dict) or record.get("schema_version") != cls.RUN_VERSION:
+            raise ValueError("Unsupported or invalid kiln run file")
+        settings = record.get("settings")
+        progress = record.get("progress")
+        result = record.get("result")
+        metrics = record.get("metrics")
+        samples = record.get("samples")
+        events = record.get("events", [])
+        if not isinstance(events, list):
+            raise ValueError("Run events must be a list")
+        if not isinstance(settings, dict) or any(key not in settings for key in cls.SETTING_FIELDS):
+            raise ValueError("Run file is missing its process settings")
+        if not isinstance(progress, dict) or not isinstance(result, dict) or not isinstance(metrics, dict) or not isinstance(samples, list):
+            raise ValueError("Run file is missing its progress, result, metrics, or samples")
+        record["events"] = events
+        try:
+            for key in cls.SETTING_FIELDS:
+                settings[key] = cls._number(settings[key], key)
+            progress["stage"] = int(progress["stage"])
+            progress["fraction"] = cls._number(progress["fraction"], "progress fraction")
+            result["duration_s"] = cls._number(result["duration_s"], "run duration")
+            if result["duration_s"] < 0 or not isinstance(result.get("status"), str):
+                raise ValueError("Run file contains invalid outcome details")
+            if not 0 <= progress["stage"] <= 4 or not 0.0 <= progress["fraction"] <= 1.0:
+                raise ValueError("Run file contains invalid progress values")
+            if result.get("state") not in {"complete", "aborted", "fault", "e_stop"}:
+                raise ValueError("Run file contains an invalid terminal state")
+            previous_elapsed = -1.0
+            for sample in samples:
+                for key in cls.SAMPLE_FIELDS:
+                    sample[key] = cls._number(sample[key], key)
+                if sample["elapsed_s"] < previous_elapsed or sample["elapsed_s"] < 0:
+                    raise ValueError("Run samples must have increasing elapsed times")
+                previous_elapsed = sample["elapsed_s"]
+            for key in ("hold_reached_s", "cooldown_s", "stop_elapsed_s"):
+                if result.get(key) is not None:
+                    result[key] = cls._number(result[key], key)
+            for key in ("peak", "hold_minimum"):
+                metric = metrics.get(key)
+                if metric is not None:
+                    if not isinstance(metric, dict):
+                        raise ValueError(f"{key} must be a temperature and elapsed-time pair")
+                    metric["temperature_c"] = cls._number(metric["temperature_c"], f"{key} temperature")
+                    metric["elapsed_s"] = cls._number(metric["elapsed_s"], f"{key} elapsed time")
+            previous_event_time = -1.0
+            for event in events:
+                if (not isinstance(event, dict)
+                        or not isinstance(event.get("type"), str)
+                        or not isinstance(event.get("description"), str)):
+                    raise ValueError("Run file contains an invalid event")
+                event["elapsed_s"] = cls._number(event["elapsed_s"], "event elapsed time")
+                if event["elapsed_s"] < previous_event_time or event["elapsed_s"] < 0:
+                    raise ValueError("Run events must be in chronological order")
+                previous_event_time = event["elapsed_s"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid kiln run file: {exc}") from exc
+        return record
 
     @staticmethod
-    def export_settings(
-        path,
-        settings
-    ):
+    def _number(value, field):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"{field} must be finite")
+        return number
 
-        path = Path(path)
+    @classmethod
+    def import_settings(cls, path):
+        with Path(path).open(newline="", encoding="utf-8-sig") as stream:
+            rows = list(csv.DictReader(stream))
+        if len(rows) != 1 or any(key not in rows[0] for key in cls.SETTING_FIELDS):
+            raise ValueError("Settings CSV must contain one row with target, hold duration, and PID gains")
+        try:
+            return {key: cls._number(rows[0][key], key) for key in cls.SETTING_FIELDS}
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Settings file contains an invalid numeric value") from exc
 
-        if path.suffix.lower() != ".json":
-
-            path = path.with_suffix(
-                ".json"
-            )
-
-
-        path.write_text(
-            json.dumps(
-                settings,
-                indent=2
-            ),
-            encoding="utf-8"
-        )
-
-
-    @staticmethod
-    def import_settings(path):
-
-        return json.loads(
-            Path(path).read_text(
-                encoding="utf-8"
-            )
-        )
+    @classmethod
+    def export_settings(cls, settings, path):
+        path = Path(path).with_suffix(".csv")
+        with path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=cls.SETTING_FIELDS)
+            writer.writeheader()
+            writer.writerow({key: settings[key] for key in cls.SETTING_FIELDS})
+        return path

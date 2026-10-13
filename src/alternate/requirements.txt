@@ -1,6 +1,0 @@
-﻿PySide6
-pyqtgraph
-numpy
-gpiozero
-adafruit-blinka
-adafruit-circuitpython-max31865

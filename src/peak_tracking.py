@@ -1,4 +1,4 @@
-﻿"""Track the highest temperature measured during an oven run."""
+"""Track the highest temperature measured during an oven run."""
 
 from __future__ import annotations
 
@@ -33,12 +33,3 @@ class PeakTracker:
             f"{int(minutes):02d}:{seconds:04.1f} "
             f"({sign}{abs(difference_c):.2f} °C vs target)"
         )
-
-
-if __name__ == "__main__":
-    # The simulation's peak update is `peak = max(peak, temperature)`.
-    # This example also records when that peak occurred for a graph label.
-    tracker = PeakTracker()
-    for elapsed_s, temperature_c in ((0.0, 20.0), (32.8, 45.07), (60.0, 44.98)):
-        tracker.update(temperature_c, elapsed_s)
-    print(tracker.annotation(target_temperature_c=45.0))

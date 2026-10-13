@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sys
 
+import config
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -124,7 +125,60 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Oven Controller")
         self._build_toolbar()
         self._build_layout()
+        self._set_graph_auto_range_icon()
         self.resize(1280, 760)
+
+    def _set_graph_auto_range_icon(self) -> None:
+        """Use a fit-to-view glyph on Pyqtgraph's built-in auto-range button."""
+        pixmap = QtGui.QPixmap(24, 24)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        pen = QtGui.QPen(QtGui.QColor("#d9a441"), 2.4)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        # Four open corners suggest expanding the plot to fit its contents.
+        for x_sign, y_sign in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            x_inner, x_outer = (7, 3) if x_sign == 1 else (17, 21)
+            y_inner, y_outer = (7, 3) if y_sign == 1 else (17, 21)
+            painter.drawLine(QtCore.QPointF(x_outer, y_inner), QtCore.QPointF(x_inner, y_inner))
+            painter.drawLine(QtCore.QPointF(x_inner, y_outer), QtCore.QPointF(x_inner, y_inner))
+        painter.end()
+        self.graph_item.autoBtn.setScale(20 / 14)
+        self.graph_item.autoBtn.setPixmap(pixmap)
+        self.graph_item.autoBtn.setToolTip("Auto-range graph")
+        self.graph_item.autoBtn.clicked.connect(self._restore_empty_graph_range)
+        self.graph_item.autoBtn.clicked.connect(self.fit_graph_to_data)
+
+    def fit_graph_to_data(self, *_args) -> None:
+        """Show the complete temperature run when the graph's fit button is used."""
+        x_data, y_data = self.temperature_curve.getData()
+        if x_data is None or len(x_data) == 0:
+            self._restore_empty_graph_range()
+            return
+        x_max = float(max(x_data))
+        x_pad = max(2.0, x_max * 0.03)
+        y_values = list(y_data)
+        goal_x, goal_y = self.goal_curve.getData()
+        if goal_x is not None and len(goal_y):
+            y_values.extend(goal_y)
+        y_min, y_max = float(min(y_values)), float(max(y_values))
+        y_pad = max(3.0, (y_max - y_min) * 0.08)
+        full_x_max = max(GRAPH_WINDOW_S, x_max + x_pad)
+        self.graph_item.vb.setLimits(xMin=0, xMax=full_x_max, minXRange=5, maxXRange=full_x_max)
+        self.duty_view.setLimits(xMin=0, xMax=full_x_max, minXRange=5, maxXRange=full_x_max)
+        self.graph_item.setXRange(0, x_max + x_pad, padding=0)
+        self.graph_item.setYRange(max(0.0, y_min - y_pad), min(MAX_TEMPERATURE_DISPLAY_C, y_max + y_pad), padding=0)
+
+    def _restore_empty_graph_range(self, *_args) -> None:
+        """Give auto-range a useful default when the graph has no samples yet."""
+        x_data, _y_data = self.temperature_curve.getData()
+        if x_data is not None and len(x_data) > 0:
+            return
+        self.graph_item.setXRange(0, GRAPH_WINDOW_S, padding=0)
+        self.graph_item.setYRange(0, MAX_TEMPERATURE_DISPLAY_C, padding=0)
+        self.duty_view.setYRange(0, MAX_OUTPUT_PERCENT, padding=0)
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Process")
@@ -141,8 +195,11 @@ class OvenWindow(QtWidgets.QMainWindow):
             ("Stop", self.stop_process, "stop", "#d45b52"),
             ("Reset", self.reset_process, "reset", "#d99a2b"),
             (None, None, None, None),
-            ("Import", self.import_settings, "import", "#63a8e8"),
-            ("Export", self.export_run_data, "export", "#63a8e8"),
+            ("Import run", self.import_run, "import", "#63a8e8"),
+            ("Export run", self.export_run_data, "export", "#63a8e8"),
+            ("Import settings", self.import_settings, "import_settings", "#63a8e8"),
+            ("Export settings", self.export_settings, "export_settings", "#63a8e8"),
+
             ("Event log", self.show_run_events, "events", "#63a8e8"),
         )
         for label, callback, icon_name, accent in action_specs:
@@ -191,6 +248,24 @@ class OvenWindow(QtWidgets.QMainWindow):
             painter.drawPolygon(QtGui.QPolygonF((
                 QtCore.QPointF(4, 4), QtCore.QPointF(4, 11), QtCore.QPointF(10, 7),
             )))
+        elif symbol in ("import_settings", "export_settings"):
+            # Compact control sliders paired with the transfer direction.
+            direction = "import" if symbol == "import_settings" else "export"
+            painter.drawLine(QtCore.QPointF(4, 7), QtCore.QPointF(13, 7))
+            painter.drawLine(QtCore.QPointF(4, 12), QtCore.QPointF(13, 12))
+            painter.drawLine(QtCore.QPointF(4, 17), QtCore.QPointF(13, 17))
+            painter.setBrush(QtGui.QColor(accent))
+            for x, y in ((8, 7), (11, 12), (6, 17)):
+                painter.drawEllipse(QtCore.QPointF(x, y), 1.5, 1.5)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            if direction == "import":
+                painter.drawLine(QtCore.QPointF(18, 5), QtCore.QPointF(18, 18))
+                painter.drawLine(QtCore.QPointF(15, 15), QtCore.QPointF(18, 18))
+                painter.drawLine(QtCore.QPointF(21, 15), QtCore.QPointF(18, 18))
+            else:
+                painter.drawLine(QtCore.QPointF(18, 19), QtCore.QPointF(18, 6))
+                painter.drawLine(QtCore.QPointF(15, 9), QtCore.QPointF(18, 6))
+                painter.drawLine(QtCore.QPointF(21, 9), QtCore.QPointF(18, 6))
         elif symbol in ("import", "export"):
             # A tray makes the direction of the transfer unambiguous.
             tray = QtGui.QPainterPath(QtCore.QPointF(5, 14))
@@ -270,13 +345,15 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.duty_view.addItem(self.duty_curve)
         self.legend.addItem(self.duty_curve, "Duty cycle")
         layout.addWidget(self.graph, 1)
+        self.graph_item.vb.sigRangeChanged.connect(self._fit_visible_temperature_annotations)
+        self.graph_item.vb.sigResized.connect(self._fit_visible_temperature_annotations)
 
         side = QtWidgets.QVBoxLayout()
         side.setSpacing(12)
         layout.addLayout(side)
         controls_box = QtWidgets.QGroupBox("Controls")
         controls = QtWidgets.QFormLayout(controls_box)
-        self.target_input = self._spin(30.0, 60.0, DEFAULT_TARGET_TEMPERATURE_C, " °C", decimals=1)
+        self.target_input = self._spin(config.MIN_SETPOINT, config.MAX_SETPOINT, DEFAULT_TARGET_TEMPERATURE_C, " °C", decimals=1)
         self.target_input.setSingleStep(0.1)
         self.kp_input = self._spin(0.0, 10.0, DEFAULT_KP, decimals=2, step=0.01)
         self.ki_input = self._spin(0.0, 10.0, DEFAULT_KI, decimals=3, step=0.001)
@@ -364,7 +441,31 @@ class OvenWindow(QtWidgets.QMainWindow):
         annotation.setPos(elapsed_s, temperature_c)
         self.graph.addItem(marker)
         self.graph.addItem(annotation)
+        self._fit_temperature_annotation(annotation)
         self.temperature_marker_items.extend((marker, annotation))
+
+    def _fit_temperature_annotation(self, annotation: pg.TextItem) -> None:
+        """Flip marker text inward when its preferred placement crosses the plot edge."""
+        bounds = self.graph_item.vb.sceneBoundingRect().adjusted(8, 8, -8, -8)
+        anchor_x, anchor_y = 0.0, 1.0
+        annotation.setAnchor((anchor_x, anchor_y))
+        label_bounds = annotation.mapRectToScene(annotation.boundingRect())
+        if label_bounds.right() > bounds.right():
+            anchor_x = 1.0
+        elif label_bounds.left() < bounds.left():
+            anchor_x = 0.0
+        annotation.setAnchor((anchor_x, anchor_y))
+        label_bounds = annotation.mapRectToScene(annotation.boundingRect())
+        if label_bounds.top() < bounds.top():
+            anchor_y = 0.0
+        elif label_bounds.bottom() > bounds.bottom():
+            anchor_y = 1.0
+        annotation.setAnchor((anchor_x, anchor_y))
+
+    def _fit_visible_temperature_annotations(self, *_args) -> None:
+        """Reposition marker text as the plot is panned, zoomed, or resized."""
+        for annotation in self.temperature_marker_items[1::2]:
+            self._fit_temperature_annotation(annotation)
 
     def show_peak_temperature_marker(
         self,
@@ -429,6 +530,12 @@ class OvenWindow(QtWidgets.QMainWindow):
     def _resize_duty_view(self) -> None:
         self.duty_view.setGeometry(self.graph_item.vb.sceneBoundingRect())
 
+    def _set_graph_time_extent(self, end_s: float) -> None:
+        """Keep panning bounded to the time covered by the current run."""
+        x_max = max(GRAPH_WINDOW_S, end_s)
+        self.graph_item.vb.setLimits(xMin=0, xMax=x_max)
+        self.duty_view.setLimits(xMin=0, xMax=x_max)
+
     def start_process(self) -> None:
         self._clear_temperature_markers()
 
@@ -436,6 +543,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         pass
 
     def reset_process(self) -> None:
+        pass
+
+    def import_run(self) -> None:
         pass
 
     def import_settings(self) -> None:
@@ -455,6 +565,138 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def restore_process_defaults(self) -> None:
         pass
+
+
+def show_run_summary_preview(window: OvenWindow) -> None:
+    """Display a disposable, fake-data run summary preview in the status panel."""
+    examples = {
+        "Completed": dict(outcome="Completed successfully", duration=186.4, target=45.0,
+                          peak=(47.3, 132.0), low=(44.2, 78.0),
+                          reason="Process reached its planned end.", color="#4caf70"),
+        "Manually stopped": dict(outcome="Stopped by operator", duration=104.8, target=45.0,
+                                 peak=(46.1, 81.0), low=(42.7, 37.0),
+                                 reason="Operator requested a stop during the holding stage.", color="#d99a2b"),
+        "Forced stop": dict(outcome="Emergency stop", duration=62.3, target=45.0,
+                            peak=(43.8, 58.0), low=(31.4, 12.0),
+                            reason="Emergency stop was activated; heater output is off.", color="#d45b52"),
+    }
+    status_box = next((box for box in window.findChildren(QtWidgets.QGroupBox)
+                       if box.title() == "Process status"), None)
+    if status_box is None or status_box.layout() is None:
+        return
+
+    status_layout = status_box.layout()
+    status_layout.addWidget(QtWidgets.QLabel("<b>Run summary preview</b>", status_box))
+    selector = QtWidgets.QComboBox(status_box)
+    selector.addItems(examples)
+    selector.setToolTip("Switch between fabricated run outcomes")
+    status_layout.addWidget(selector)
+
+    card = QtWidgets.QFrame(status_box)
+    card.setObjectName("runSummaryPreviewCard")
+    card.setStyleSheet(
+        "QFrame#runSummaryPreviewCard { background: #2a3139; border: 1px solid #59636d; border-radius: 6px; }"
+        "QLabel { border: none; }"
+    )
+    card_layout = QtWidgets.QVBoxLayout(card)
+    card_layout.setContentsMargins(10, 8, 10, 8)
+    card_layout.setSpacing(4)
+    outcome_label = QtWidgets.QLabel(card)
+    outcome_label.setStyleSheet("font-weight: bold; font-size: 11pt;")
+    duration_label = QtWidgets.QLabel(card)
+    stats_label = QtWidgets.QLabel(card)
+    stats_label.setWordWrap(True)
+    detail_button = QtWidgets.QPushButton("Run details…", card)
+    detail_button.setMaximumWidth(130)
+    card_layout.addWidget(outcome_label)
+    card_layout.addWidget(duration_label)
+    card_layout.addWidget(stats_label)
+    card_layout.addWidget(detail_button, alignment=QtCore.Qt.AlignmentFlag.AlignLeft)
+    status_layout.addWidget(card)
+
+    def time_text(seconds: float) -> str:
+        minutes, remainder = divmod(seconds, 60.0)
+        return f"{int(minutes):02d}:{remainder:04.1f}"
+
+    def selected_example() -> tuple[str, dict[str, object]]:
+        name = selector.currentText()
+        return name, examples[name]
+
+    def refresh_card(_index: int = 0) -> None:
+        name, example = selected_example()
+        peak_c, peak_s = example["peak"]
+        low_c, low_s = example["low"]
+        difference_c = peak_c - example["target"]
+        outcome_label.setText(example["outcome"])
+        outcome_label.setStyleSheet(
+            f"font-weight: bold; font-size: 11pt; color: {example['color']};"
+        )
+        duration_label.setText(f"Duration  {time_text(example['duration'])}")
+        stats_label.setText(
+            f"Peak  {peak_c:.1f} °C at {time_text(peak_s)}  ({difference_c:+.1f} °C vs target)\n"
+            f"Lowest observed  {low_c:.1f} °C at {time_text(low_s)}"
+        )
+
+        # These samples and markers are fake and exist only for this preview.
+        end_s = example["duration"]
+        points = sorted(set((0.0, end_s * 0.2, low_s, end_s * 0.6, peak_s, end_s)))
+        temperatures = [
+            25.0 + (low_c - 25.0) * index / max(1, len(points) - 1)
+            for index in range(len(points))
+        ]
+        temperatures[points.index(low_s)] = low_c
+        temperatures[points.index(peak_s)] = peak_c
+        window.temperature_curve.setData(points, temperatures)
+        window.goal_curve.setData([0.0, end_s], [example["target"], example["target"]])
+        window.duty_curve.setData(points, [max(0.0, 80.0 - index * 12.0) for index in range(len(points))])
+        window._clear_temperature_markers()
+        if name == "Completed":
+            window.show_hold_minimum_temperature_marker(low_s, low_c)
+            window.show_peak_temperature_marker(peak_s, peak_c, example["target"])
+        else:
+            if name == "Manually stopped":
+                window.show_hold_minimum_temperature_marker(low_s, low_c)
+            window._add_temperature_marker(end_s, temperatures[-1], "Stopped", example["color"])
+        window._set_graph_time_extent(end_s)
+        window.graph_item.setXRange(max(0.0, end_s - GRAPH_WINDOW_S), max(GRAPH_WINDOW_S, end_s), padding=0)
+
+    def show_details() -> None:
+        name, example = selected_example()
+        peak_c, peak_s = example["peak"]
+        low_c, low_s = example["low"]
+        difference_c = peak_c - example["target"]
+        dialog = QtWidgets.QDialog(window)
+        dialog.setWindowTitle(f"Run details — {name}")
+        dialog.setMinimumWidth(430)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        outcome = QtWidgets.QLabel(f"<b>{example['outcome']}</b>")
+        outcome.setStyleSheet(f"color: {example['color']}; font-size: 13pt;")
+        layout.addWidget(outcome)
+        details = QtWidgets.QFormLayout()
+        details.addRow("Outcome", QtWidgets.QLabel(name))
+        details.addRow("Duration", QtWidgets.QLabel(time_text(example["duration"])))
+        details.addRow("Target", QtWidgets.QLabel(f"{example['target']:.1f} °C"))
+        details.addRow("Peak", QtWidgets.QLabel(f"{peak_c:.1f} °C at {time_text(peak_s)}"))
+        details.addRow("Peak vs target", QtWidgets.QLabel(f"{difference_c:+.1f} °C"))
+        details.addRow("Lowest observed", QtWidgets.QLabel(f"{low_c:.1f} °C at {time_text(low_s)}"))
+        details.addRow("Stop information", QtWidgets.QLabel(example["reason"]))
+        layout.addLayout(details)
+        note = QtWidgets.QLabel(
+            "Fabricated preview data. Temperatures describe the run up to its end; "
+            "only a completed run receives the peak graph annotation."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #cbd5df;")
+        layout.addWidget(note)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    selector.currentIndexChanged.connect(refresh_card)
+    detail_button.clicked.connect(show_details)
+    refresh_card()
 
 
 def main() -> None:
