@@ -86,8 +86,6 @@ class Application:
         self.hw.heater.emergency_off()
         self.hw.motor.stop()
         self.command("emergency", reason)
-    def emergency_stop(self):
-        self._emergency_cut("gui_emergency_stop")
     def snapshot(self):
         with self._lock:
             view = self._view

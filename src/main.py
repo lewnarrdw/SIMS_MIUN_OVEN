@@ -32,9 +32,6 @@ class _ImportPreviewService:
     def command(self, _name, _values=None):
         return None
 
-    def emergency_stop(self):
-        return None
-
     def close(self):
         return None
 
@@ -57,15 +54,21 @@ class KilnWindow(gui.OvenWindow):
         self.kp_input.valueChanged.connect(self._tune)
         self.ki_input.valueChanged.connect(self._tune)
         self.kd_input.valueChanged.connect(self._tune)
+        for checkbox, _value_input in self.pid_enable_inputs:
+            checkbox.toggled.connect(self._tune)
         for widget in (self.target_input, self.hold_input, self.kp_input, self.ki_input, self.kd_input):
             widget.valueChanged.connect(self._sync_start_settings)
+        for checkbox, _value_input in self.pid_enable_inputs:
+            checkbox.toggled.connect(self._sync_start_settings)
         self.restore_pid_defaults()
         self.restore_process_defaults()
         self._sync_start_settings()
 
     def _settings(self):
         return {"target_temperature_c": self.target_input.value(), "hold_duration_s": self.hold_input.value(),
-                "kp": self.kp_input.value(), "ki": self.ki_input.value(), "kd": self.kd_input.value()}
+                "kp": self.kp_input.value() if self.kp_enable.isChecked() else 0.0,
+                "ki": self.ki_input.value() if self.ki_enable.isChecked() else 0.0,
+                "kd": self.kd_input.value() if self.kd_enable.isChecked() else 0.0}
 
     def _tune(self, *_):
         if self._historical_record is None:
@@ -96,9 +99,6 @@ class KilnWindow(gui.OvenWindow):
 
     def stop_process(self):
         self.service.command("stop")
-
-    def emergency_stop(self):
-        self.service.emergency_stop()
 
     def manual_command(self, name):
         self.service.command(name)
@@ -295,11 +295,20 @@ class KilnWindow(gui.OvenWindow):
             raise ValueError("Settings cannot be imported during an active run")
         widgets = ((self.target_input, "target_temperature_c"), (self.hold_input, "hold_duration_s"),
                    (self.kp_input, "kp"), (self.ki_input, "ki"), (self.kd_input, "kd"))
+        enable_widgets = (
+            (self.kp_enable, "kp", self.kp_input),
+            (self.ki_enable, "ki", self.ki_input),
+            (self.kd_enable, "kd", self.kd_input),
+        )
         blockers = [QtCore.QSignalBlocker(widget) for widget, _ in widgets]
+        blockers.extend(QtCore.QSignalBlocker(checkbox) for checkbox, _key, _input in enable_widgets)
         for widget, key in widgets:
             widget.setValue(settings[key])
+        for checkbox, key, input_widget in enable_widgets:
+            checkbox.setChecked(settings[key] != 0.0)
+            input_widget.setEnabled(settings[key] != 0.0)
         del blockers
-        self.service.command("defaults", settings)
+        self.service.command("defaults", self._settings())
 
     def export_settings(self):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -312,9 +321,13 @@ class KilnWindow(gui.OvenWindow):
                 self.statusBar().showMessage(str(exc), 8000)
 
     def restore_pid_defaults(self):
-        self.kp_input.setValue(config.PID_KP)
-        self.ki_input.setValue(config.PID_KI)
-        self.kd_input.setValue(config.PID_KD)
+        for checkbox, value_input, default in (
+            (self.kp_enable, self.kp_input, config.PID_KP),
+            (self.ki_enable, self.ki_input, config.PID_KI),
+            (self.kd_enable, self.kd_input, config.PID_KD),
+        ):
+            value_input.setValue(default)
+            checkbox.setChecked(default != 0.0)
 
     def restore_process_defaults(self):
         self.target_input.setValue(min(45.0, config.MAX_SETPOINT))

@@ -120,6 +120,51 @@ class UnhighlightedDoubleSpinBox(QtWidgets.QDoubleSpinBox):
         super().stepBy(steps)
         self.lineEdit().deselect()
 
+
+class PidTermCheckBox(QtWidgets.QCheckBox):
+    """Compact themed PID toggle with a clear check or cross state marker."""
+
+    def __init__(self, label: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(label, parent)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setMinimumWidth(44)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        del event
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        box = QtCore.QRectF(1, (self.height() - 16) / 2, 16, 16)
+        checked = self.isChecked()
+        hovered = self.underMouse()
+        fill = QtGui.QColor("#397a54" if checked else "#252b31")
+        outline = QtGui.QColor("#62b57e" if checked else ("#78838d" if hovered else "#59636d"))
+        if hovered and checked:
+            fill = QtGui.QColor("#438c61")
+        painter.setPen(QtGui.QPen(outline, 1.4))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(box, 3, 3)
+
+        if checked:
+            mark_pen = QtGui.QPen(QtGui.QColor("#f4f7fa"), 1.8)
+            mark_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+            mark_pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(mark_pen)
+            mark = QtGui.QPainterPath(QtCore.QPointF(4.5, box.center().y()))
+            mark.lineTo(7, box.center().y() + 2.5)
+            mark.lineTo(13.5, box.center().y() - 3.5)
+            painter.drawPath(mark)
+
+        painter.setPen(QtGui.QColor("#d7dde3" if checked else "#a0aab3"))
+        font = painter.font()
+        font.setWeight(QtGui.QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.drawText(
+            QtCore.QRectF(24, 0, self.width() - 24, self.height()),
+            QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft,
+            self.text(),
+        )
+
+
 class OvenWindow(QtWidgets.QMainWindow):
     """Oven controller window."""
 
@@ -261,22 +306,6 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.manual_button.setMenu(self.manual_menu)
         self.manual_button.setToolTip("Open door, close door, read temperature, or control the heater")
         toolbar.addWidget(self.manual_button)
-
-        spacer = QtWidgets.QWidget(self)
-        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
-        self.emergency_stop_button = QtWidgets.QPushButton("E-STOP", self)
-        self.emergency_stop_button.setMinimumHeight(34)
-        self.emergency_stop_button.setToolTip("Immediately stop the process and cut heater output")
-        self.emergency_stop_button.setStyleSheet(
-            "QPushButton { background-color: #b3261e; color: white; font-weight: bold; "
-            "border: 2px solid #ff6b62; border-radius: 5px; padding: 5px 16px; }"
-            "QPushButton:hover { background-color: #d32f2f; }"
-            "QPushButton:pressed { background-color: #7f1d1d; }"
-        )
-        self.emergency_stop_button.clicked.connect(self.emergency_stop)
-        toolbar.addWidget(self.emergency_stop_button)
-
 
     @staticmethod
     def _toolbar_icon(symbol: str, accent: str) -> QtGui.QIcon:
@@ -443,6 +472,19 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.kp_input = self._spin(0.0, 10.0, DEFAULT_KP, decimals=2, step=0.01)
         self.ki_input = self._spin(0.0, 10.0, DEFAULT_KI, decimals=3, step=0.001)
         self.kd_input = self._spin(0.0, 10.0, DEFAULT_KD, decimals=2, step=0.01)
+        self.kp_enable = self._pid_checkbox("P", "Enable proportional action")
+        self.ki_enable = self._pid_checkbox("I", "Enable integral action")
+        self.kd_enable = self._pid_checkbox("D", "Enable derivative action")
+        self.pid_enable_inputs = (
+            (self.kp_enable, self.kp_input),
+            (self.ki_enable, self.ki_input),
+            (self.kd_enable, self.kd_input),
+        )
+        for checkbox, value_input in self.pid_enable_inputs:
+            checkbox.toggled.connect(value_input.setEnabled)
+            value_input.setStyleSheet(
+                "QDoubleSpinBox:disabled { color: #78838d; background-color: #252b31; border-color: #414a53; }"
+            )
         self.hold_input = self._spin(1.0, MAX_DURATION_S, DEFAULT_HOLD_DURATION_S, " s", decimals=0)
         self.restore_pid_button = QtWidgets.QPushButton("Restore defaults")
         self.restore_pid_button.setStyleSheet(
@@ -463,9 +505,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         separator.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
         controls.addRow(separator)
         controls.addRow(QtWidgets.QLabel("<b>PID tuning</b>"))
-        controls.addRow(QtWidgets.QLabel("<span style='font-size: 16pt;'>K<sub>p</sub></span>"), self.kp_input)
-        controls.addRow(QtWidgets.QLabel("<span style='font-size: 16pt;'>K<sub>i</sub></span>"), self.ki_input)
-        controls.addRow(QtWidgets.QLabel("<span style='font-size: 16pt;'>K<sub>d</sub></span>"), self.kd_input)
+        controls.addRow(self._pid_control_row(self.kp_enable, self.kp_input))
+        controls.addRow(self._pid_control_row(self.ki_enable, self.ki_input))
+        controls.addRow(self._pid_control_row(self.kd_enable, self.kd_input))
         controls.addRow(self.restore_pid_button)
         side.addWidget(controls_box)
 
@@ -493,6 +535,23 @@ class OvenWindow(QtWidgets.QMainWindow):
         control.setSingleStep(step if step is not None else (1.0 if decimals == 0 else 0.01))
         control.setSuffix(suffix)
         return control
+
+    @staticmethod
+    def _pid_checkbox(label: str, tooltip: str) -> QtWidgets.QCheckBox:
+        checkbox = PidTermCheckBox(label)
+        checkbox.setChecked(True)
+        checkbox.setToolTip(tooltip)
+        return checkbox
+
+    @staticmethod
+    def _pid_control_row(checkbox: QtWidgets.QCheckBox, value_input: QtWidgets.QDoubleSpinBox) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addWidget(checkbox)
+        layout.addWidget(value_input, 1)
+        return row
 
     def _clear_temperature_markers(self) -> None:
         """Remove annotations from the previous run."""
@@ -662,9 +721,6 @@ class OvenWindow(QtWidgets.QMainWindow):
         self._clear_temperature_markers()
 
     def stop_process(self) -> None:
-        pass
-
-    def emergency_stop(self) -> None:
         pass
 
     def manual_command(self, name: str) -> None:
