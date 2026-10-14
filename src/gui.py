@@ -233,6 +233,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             self.file_actions[label] = action
         self.file_button = QtWidgets.QToolButton(self)
         self.file_button.setText("File")
+        self.file_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.file_button.setIcon(self._toolbar_icon("folder", "#63a8e8"))
         self.file_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.file_button.setMenu(self.file_menu)
         self.file_button.setToolTip("Import and export runs and settings")
@@ -253,6 +255,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             self.manual_actions[label] = action
         self.manual_button = QtWidgets.QToolButton(self)
         self.manual_button.setText("Manual controls")
+        self.manual_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.manual_button.setIcon(self._toolbar_icon("controls", "#d99a2b"))
         self.manual_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.manual_button.setMenu(self.manual_menu)
         self.manual_button.setToolTip("Open door, close door, read temperature, or control the heater")
@@ -349,6 +353,27 @@ class OvenWindow(QtWidgets.QMainWindow):
                 painter.drawEllipse(QtCore.QPointF(8, y), 1.25, 1.25)
                 painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
                 painter.drawLine(QtCore.QPointF(11, y), QtCore.QPointF(line_end, y))
+        elif symbol == "folder":
+            # A classic tabbed folder silhouette for run and settings files.
+            folder = QtGui.QPainterPath(QtCore.QPointF(3, 7))
+            folder.lineTo(9, 7)
+            folder.lineTo(11, 10)
+            folder.lineTo(21, 10)
+            folder.lineTo(19, 19)
+            folder.quadTo(18.8, 20, 17.5, 20)
+            folder.lineTo(4.5, 20)
+            folder.quadTo(3, 20, 3, 18.5)
+            folder.closeSubpath()
+            painter.setBrush(QtGui.QColor(accent))
+            painter.drawPath(folder)
+        elif symbol == "controls":
+            # Three distinct adjustment tracks, the familiar tune/controls glyph.
+            for x, knob_y in ((6, 8), (12, 15), (18, 10)):
+                painter.drawLine(QtCore.QPointF(x, 4), QtCore.QPointF(x, knob_y - 2.5))
+                painter.drawLine(QtCore.QPointF(x, knob_y + 2.5), QtCore.QPointF(x, 20))
+                painter.setBrush(QtGui.QColor(accent))
+                painter.drawEllipse(QtCore.QPointF(x, knob_y), 2.5, 2.5)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
 
         painter.end()
         return QtGui.QIcon(pixmap)
