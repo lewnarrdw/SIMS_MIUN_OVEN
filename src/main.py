@@ -97,6 +97,12 @@ class KilnWindow(gui.OvenWindow):
     def stop_process(self):
         self.service.command("stop")
 
+    def emergency_stop(self):
+        self.service.emergency_stop()
+
+    def manual_command(self, name):
+        self.service.command(name)
+
     def reset_process(self):
         self._historical_record = None
         self._clear_temperature_markers()
@@ -361,8 +367,13 @@ def main():
         window.setWindowTitle("Oven Controller (UI only - no hardware)")
         for toolbar in window.findChildren(QtWidgets.QToolBar):
             for action in toolbar.actions():
-                if action.text() != "Import run":
+                if (toolbar.widgetForAction(action) not in (window.file_button, window.manual_button)
+                        and action is not window.event_log_action):
                     action.setEnabled(False)
+        for label, action in window.file_actions.items():
+            action.setEnabled(label == "Import run")
+        for action in window.manual_actions.values():
+            action.setEnabled(False)
         window.show()
         return app.exec()
 

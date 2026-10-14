@@ -197,18 +197,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             ("Run", self.start_process, "run", "#4caf70"),
             ("Stop", self.stop_process, "stop", "#d45b52"),
             ("Reset", self.reset_process, "reset", "#d99a2b"),
-            (None, None, None, None),
-            ("Import run", self.import_run, "import", "#63a8e8"),
-            ("Export run", self.export_run_data, "export", "#63a8e8"),
-            ("Import settings", self.import_settings, "import_settings", "#63a8e8"),
-            ("Export settings", self.export_settings, "export_settings", "#63a8e8"),
-
-            ("Event log", self.show_run_events, "events", "#63a8e8"),
         )
         for label, callback, icon_name, accent in action_specs:
-            if label is None:
-                toolbar.addSeparator()
-                continue
             action = QtGui.QAction(label, self)
             if label == "Run":
                 self.run_action = action
@@ -221,6 +211,67 @@ class OvenWindow(QtWidgets.QMainWindow):
             action.setStatusTip(action.toolTip())
             action.triggered.connect(callback)
             toolbar.addAction(action)
+
+        toolbar.addSeparator()
+        self.event_log_action = QtGui.QAction("Event log", self)
+        self.event_log_action.setIcon(self._toolbar_icon("events", "#63a8e8"))
+        self.event_log_action.setToolTip("View events from this run")
+        self.event_log_action.triggered.connect(self.show_run_events)
+        toolbar.addAction(self.event_log_action)
+        toolbar.addSeparator()
+
+        self.file_menu = QtWidgets.QMenu("File", self)
+        self.file_actions: dict[str, QtGui.QAction] = {}
+        for label, callback in (
+            ("Import run", self.import_run),
+            ("Export run", self.export_run_data),
+            ("Import settings", self.import_settings),
+            ("Export settings", self.export_settings),
+        ):
+            action = self.file_menu.addAction(label)
+            action.triggered.connect(callback)
+            self.file_actions[label] = action
+        self.file_button = QtWidgets.QToolButton(self)
+        self.file_button.setText("File")
+        self.file_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.file_button.setMenu(self.file_menu)
+        self.file_button.setToolTip("Import and export runs and settings")
+        toolbar.addWidget(self.file_button)
+        toolbar.addSeparator()
+
+        self.manual_menu = QtWidgets.QMenu("Manual controls", self)
+        self.manual_actions: dict[str, QtGui.QAction] = {}
+        for label, command_name in (
+            ("Open door", "open"),
+            ("Close door", "close"),
+            ("Read temperature", "read_temperature"),
+            ("Heater on", "heater_on"),
+            ("Heater off", "heater_off"),
+        ):
+            action = self.manual_menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, name=command_name: self.manual_command(name))
+            self.manual_actions[label] = action
+        self.manual_button = QtWidgets.QToolButton(self)
+        self.manual_button.setText("Manual controls")
+        self.manual_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.manual_button.setMenu(self.manual_menu)
+        self.manual_button.setToolTip("Open door, close door, read temperature, or control the heater")
+        toolbar.addWidget(self.manual_button)
+
+        spacer = QtWidgets.QWidget(self)
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        self.emergency_stop_button = QtWidgets.QPushButton("E-STOP", self)
+        self.emergency_stop_button.setMinimumHeight(34)
+        self.emergency_stop_button.setToolTip("Immediately stop the process and cut heater output")
+        self.emergency_stop_button.setStyleSheet(
+            "QPushButton { background-color: #b3261e; color: white; font-weight: bold; "
+            "border: 2px solid #ff6b62; border-radius: 5px; padding: 5px 16px; }"
+            "QPushButton:hover { background-color: #d32f2f; }"
+            "QPushButton:pressed { background-color: #7f1d1d; }"
+        )
+        self.emergency_stop_button.clicked.connect(self.emergency_stop)
+        toolbar.addWidget(self.emergency_stop_button)
 
 
     @staticmethod
@@ -290,13 +341,14 @@ class OvenWindow(QtWidgets.QMainWindow):
                 painter.drawLine(QtCore.QPointF(8.5, 8.5), QtCore.QPointF(12, 5))
                 painter.drawLine(QtCore.QPointF(15.5, 8.5), QtCore.QPointF(12, 5))
         elif symbol == "events":
-            # Clipboard style event list with clearly separated, aligned entries.
-            panel = QtCore.QRectF(4.5, 4, 15, 17)
-            painter.drawRoundedRect(panel, 2, 2)
-            painter.drawRoundedRect(QtCore.QRectF(9, 2.5, 6, 3.5), 1.2, 1.2)
-            for y in (9, 13, 17):
-                painter.drawEllipse(QtCore.QPointF(8, y), 0.85, 0.85)
-                painter.drawLine(QtCore.QPointF(11, y), QtCore.QPointF(16.5, y))
+            # A chronological event timeline on a page.
+            painter.drawRoundedRect(QtCore.QRectF(4, 3, 16, 18), 2, 2)
+            painter.drawLine(QtCore.QPointF(8, 6), QtCore.QPointF(8, 18))
+            for y, line_end in ((7, 17), (12, 16), (17, 18)):
+                painter.setBrush(QtGui.QColor(accent))
+                painter.drawEllipse(QtCore.QPointF(8, y), 1.25, 1.25)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawLine(QtCore.QPointF(11, y), QtCore.QPointF(line_end, y))
 
         painter.end()
         return QtGui.QIcon(pixmap)
@@ -586,6 +638,12 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def stop_process(self) -> None:
         pass
+
+    def emergency_stop(self) -> None:
+        pass
+
+    def manual_command(self, name: str) -> None:
+        del name
 
     def reset_process(self) -> None:
         pass
