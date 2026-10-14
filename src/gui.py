@@ -27,7 +27,7 @@ GRAPH_EXPANSION_FACTOR = 1.25
 class StageProgress(QtWidgets.QWidget):
     """A vertical connected-node display for the oven-process stages."""
 
-    stages = ("Ready", "Warming up", "Holding", "Cooling down")
+    stages = ("Heating", "Holding", "Cooling")
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -35,7 +35,7 @@ class StageProgress(QtWidgets.QWidget):
         self.fraction = 0.0
         self.progress_detail = ""
         self.setMinimumWidth(180)
-        self.setMinimumHeight(200)
+        self.setMinimumHeight(180)
 
     def set_progress(self, current_stage: int, fraction: float = 0.0, detail: str = "") -> None:
         self.current_stage = current_stage
@@ -59,30 +59,30 @@ class StageProgress(QtWidgets.QWidget):
         for index, (first, second) in enumerate(zip(positions, positions[1:])):
             painter.setPen(connector_pen)
             painter.drawLine(first, second)
-            if self.current_stage > index + 1:
+            if self.current_stage > index:
                 painter.setPen(complete_pen)
                 painter.drawLine(first, second)
-            elif self.current_stage == index + 1:
-                segment_start = QtCore.QPointF(first.x(), first.y() + radius)
-                segment_end = QtCore.QPointF(second.x(), second.y() - radius)
-                end = QtCore.QPointF(
-                    segment_start.x() + (segment_end.x() - segment_start.x()) * self.fraction,
-                    segment_start.y() + (segment_end.y() - segment_start.y()) * self.fraction,
-                )
-                painter.setPen(complete_pen)
-                painter.drawLine(segment_start, end)
         for index, (stage, point) in enumerate(zip(self.stages, positions)):
             completed = index < self.current_stage
             active = index == self.current_stage
             if completed:
                 fill, node_pen = QtGui.QColor("#4caf70"), QtGui.QPen(QtGui.QColor("#76d39a"), 2)
             elif active:
-                fill, node_pen = QtGui.QColor("#d99a2b"), QtGui.QPen(QtGui.QColor("#ffd166"), 3)
+                fill, node_pen = QtGui.QColor("#39434d"), QtGui.QPen(QtGui.QColor("#ffd166"), 3)
             else:
                 fill, node_pen = QtGui.QColor("#39434d"), QtGui.QPen(QtGui.QColor("#59636d"), 2)
             painter.setPen(node_pen)
             painter.setBrush(fill)
             painter.drawEllipse(point, radius, radius)
+            if active and self.fraction > 0.0:
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(QtGui.QColor("#d99a2b"))
+                node_rect = QtCore.QRectF(point.x() - radius, point.y() - radius,
+                                          radius * 2, radius * 2)
+                painter.drawPie(node_rect, 90 * 16, -round(self.fraction * 360 * 16))
+                painter.setPen(node_pen)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(point, radius, radius)
             if completed:
                 check_pen = QtGui.QPen(QtGui.QColor("#f4f7fa"), 2.5)
                 check_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
@@ -516,11 +516,14 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.progress = StageProgress()
         status.addWidget(self.progress, 1)
         self.stage_label = QtWidgets.QLabel("Current stage: Ready to run")
+        self.stage_detail_label = QtWidgets.QLabel("")
+        self.stage_detail_label.setWordWrap(True)
         self.elapsed_label = QtWidgets.QLabel("Elapsed: 00:00.0")
         self.temperature_label = QtWidgets.QLabel("Temperature: -- °C    Output: --%")
         self.door_label = QtWidgets.QLabel("Door: Unknown")
         self.door_label.setStyleSheet("color: #f4b942;")
         status.addWidget(self.stage_label)
+        status.addWidget(self.stage_detail_label)
         status.addWidget(self.elapsed_label)
         status.addWidget(self.temperature_label)
         status.addWidget(self.door_label)

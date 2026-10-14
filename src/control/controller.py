@@ -25,9 +25,11 @@ class Controller:
         self.state, self.fault_reason = State.READY, ""
         self.target, self.hold_s, self.gains = config.MIN_SETPOINT, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD)
         self.run_started = self.stable_since = self.hold_started = None
+        self.heating_start_temperature = self.cooling_start_temperature = None
         self.run_started_at = None
         self.run_settings = {}
         self.hold_reached_s = self.cooling_started = self.cooldown_s = None
+        self.heating_start_temperature = self.cooling_start_temperature = None
         self.hold_elapsed_s = 0.0
         self.resume_state = None
         self.resume_to_hold = False
@@ -70,7 +72,9 @@ class Controller:
         self.peak_tracker = PeakTracker()
         self.completion_allowed = True
         self.fault_reason = ""
-        if self.hw.switches.state() == DoorState.CLOSED: self._set_state(State.HEATING, "Warming up")
+        if self.hw.switches.state() == DoorState.CLOSED:
+            self.heating_start_temperature = temperature
+            self._set_state(State.HEATING, "Warming up")
         else:
             self.hw.motor.close_door(now); self.door_goal = DoorState.CLOSED
             self._set_state(State.DOOR_MOVING, "Closing door")
@@ -123,8 +127,10 @@ class Controller:
                 self._set_state(State.HOLDING, "Resuming hold")
             else:
                 self.resume_to_hold = True
+                self.heating_start_temperature = temperature
                 self._set_state(State.HEATING, "Reheating to resume hold")
         else:
+            self.heating_start_temperature = temperature
             self._set_state(State.HEATING, "Resuming warm up")
         self.resume_state = None
     def emergency_stop(self, reason="emergency_stop"):
@@ -164,7 +170,9 @@ class Controller:
             if self.hw.motor.state.value == "fault": self._fault(f"door_motor_{self.hw.motor.fault_reason}")
             elif self.hw.motor.state.value == "idle":
                 if self.hw.switches.state() != self.door_goal: self._fault("door_not_in_position")
-                else: self._set_state(State.HEATING, "Warming up")
+                else:
+                    self.heating_start_temperature = temperature
+                    self._set_state(State.HEATING, "Warming up")
         elif self.state in (State.HEATING, State.HOLDING) and temperature is not None:
             if control_due:
                 dt = self.config.LOOP_PERIOD_S if self.last_pid_time is None else max(0.0, now-self.last_pid_time)
@@ -172,10 +180,15 @@ class Controller:
                 feedforward = max(0.0, self.config.FF_PERCENT_PER_DEGREE*(self.target-self.config.ROOM_TEMPERATURE))
                 self.hw.heater.set_percent(self.pid.update(self.target, temperature, dt, feedforward))
             if self.state == State.HEATING:
+                start_temperature = self.heating_start_temperature
+                if start_temperature is not None and abs(self.target - start_temperature) > self.config.STABLE_TOLERANCE:
+                    self.progress_fraction = min(1.0, max(0.0,
+                        (temperature - start_temperature) / (self.target - start_temperature)))
+                else:
+                    self.progress_fraction = 1.0 if abs(temperature - self.target) <= self.config.STABLE_TOLERANCE else 0.0
                 if abs(temperature-self.target) <= self.config.STABLE_TOLERANCE:
                     self.stable_since = now if self.stable_since is None else self.stable_since
                     held = now-self.stable_since
-                    self.progress_fraction = min(1.0, held/self.config.STABLE_TIME_S)
                     self.progress_detail = f"Stable {held:.0f}/{self.config.STABLE_TIME_S:.0f} s"
                     if held >= self.config.STABLE_TIME_S:
                         self.hold_started = now
@@ -185,7 +198,7 @@ class Controller:
                         self.resume_to_hold = False
                         self.hold_min, self.hold_min_time = temperature, now-self.run_started
                         self._set_state(State.HOLDING, "Holding target")
-                else: self.stable_since, self.progress_fraction, self.progress_detail = None, 0.0, ""
+                else: self.stable_since, self.progress_detail = None, ""
             else:
                 elapsed = self.hold_elapsed_s + (now-self.hold_started)
                 if self.hold_min is None or temperature < self.hold_min:
@@ -196,9 +209,18 @@ class Controller:
                     self.hold_elapsed_s = elapsed
                     self.hold_completed = True
                     self.cooling_started = now
+                    self.cooling_start_temperature = temperature
+                    self.progress_fraction = 0.0
                     self.hw.heater.off(); self._set_state(State.COOLING, "Cooling down")
         elif self.state == State.COOLING:
             self.hw.heater.off()
+            start_temperature = self.cooling_start_temperature
+            safe_temperature = self.config.DOOR_SAFE_TEMPERATURE
+            if start_temperature is not None and start_temperature > safe_temperature:
+                self.progress_fraction = min(1.0, max(0.0,
+                    (start_temperature - temperature) / (start_temperature - safe_temperature)))
+            elif temperature <= safe_temperature:
+                self.progress_fraction = 1.0
             if self.safety.door_may_open(temperature):
                 if door != DoorState.OPEN and self.hw.motor.state.value == "idle":
                     self.hw.motor.open(now)

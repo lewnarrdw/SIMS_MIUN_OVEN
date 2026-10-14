@@ -4,7 +4,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import gui
 from application import Application
@@ -44,7 +44,12 @@ class KilnWindow(gui.OvenWindow):
         self._historical_record = None
         self._historical_range_pending = False
         self._last_run_record = None
+        self._attention_events = []
+        self._unread_attention = {}
+        self._seen_attention = set()
+        self._active_startup_reason = None
         super().__init__()
+        self._event_log_base_icon = self.event_log_action.icon()
         self._live_graph_x_max = gui.GRAPH_WINDOW_S
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(100)
@@ -167,19 +172,48 @@ class KilnWindow(gui.OvenWindow):
         state = view.state
         self.run_action.setText("Resume" if state == "paused" else "Run")
         self.run_action.setToolTip("Resume the paused run" if state == "paused" else "Start a new run")
-        progress_stage = {"door_moving": 1, "heating": 1, "holding": 2, "cooling": 3,
-                          "paused": getattr(view, "stop_stage", None) or 1,
-                          "complete": 4}.get(state, 0)
+        progress_stage = {"heating": 0, "holding": 1, "cooling": 2,
+                          "paused": max(0, (getattr(view, "stop_stage", None) or 1) - 1),
+                          "complete": 3}.get(state, -1)
         if state == "aborted":
-            progress_stage = getattr(view, "stop_stage", None) or 1
+            progress_stage = max(0, min(2, (getattr(view, "stop_stage", None) or 1) - 1))
+        if state in ("paused", "aborted") and getattr(view, "stop_state", None) == "door_moving":
+            progress_stage = -1
         self.progress.set_progress(progress_stage, view.fraction, view.detail)
-        titles = {"ready": "Ready to run", "door_moving": "Closing door", "heating": "Warming up",
+        titles = {"ready": "Ready to run", "door_moving": "Closing door", "heating": "Heating",
                   "holding": "Holding", "cooling": "Cooling down", "paused": "Paused",
                   "complete": "Complete", "aborted": "Stopped", "fault": "Fault", "e_stop": "Emergency stop"}
-        self.stage_label.setText("Current stage: " + titles.get(state, view.status))
+        opening_door = (state == "cooling" and
+                        getattr(view, "current_temperature_c", None) is not None and
+                        view.current_temperature_c <= config.DOOR_SAFE_TEMPERATURE and view.door != "open")
+        self.stage_label.setText("Current stage: " + ("Opening door" if opening_door else titles.get(state, view.status)))
         temperature = getattr(view, "current_temperature_c", None)
         if temperature is None and samples:
             temperature = samples[-1]["temperature_c"]
+
+        stage_detail = ""
+        if state in ("heating", "holding", "cooling") and len(samples) >= 2:
+            stage_names = {"heating": "Warm up started", "holding": "Hold started",
+                           "cooling": "Cool down started"}
+            starts = [event["elapsed_s"] for event in view.events
+                      if event.get("description") == stage_names[state]]
+            stage_start = starts[-1] if starts else samples[0]["elapsed_s"]
+            stage_samples = [row for row in samples if row["elapsed_s"] >= stage_start]
+            if state in ("heating", "cooling") and len(stage_samples) >= 2:
+                recent = [row for row in stage_samples if row["elapsed_s"] >= stage_samples[-1]["elapsed_s"] - 30.0]
+                if len(recent) >= 2:
+                    mean_time = sum(row["elapsed_s"] for row in recent) / len(recent)
+                    mean_temp = sum(row["temperature_c"] for row in recent) / len(recent)
+                    variance = sum((row["elapsed_s"] - mean_time) ** 2 for row in recent)
+                    slope = (sum((row["elapsed_s"] - mean_time) * (row["temperature_c"] - mean_temp)
+                                 for row in recent) / variance * 60.0) if variance else 0.0
+                    rate = slope if state == "heating" else -slope
+                    stage_detail = (f"Heating rate: {rate:+.1f} °C/min" if state == "heating"
+                                    else f"Cooling rate: {rate:.1f} °C/min")
+            elif state == "holding" and stage_samples:
+                errors = [abs(row["temperature_c"] - row["target_temperature_c"]) for row in stage_samples]
+                stage_detail = f"Average error: {sum(errors) / len(errors):.2f} °C"
+        self.stage_detail_label.setText(stage_detail)
 
         minutes, seconds = divmod(view.elapsed_s, 60.0)
         self.elapsed_label.setText(f"Elapsed: {int(minutes):02d}:{seconds:04.1f}")
@@ -195,6 +229,7 @@ class KilnWindow(gui.OvenWindow):
             widget.setEnabled(not view.running)
         if view.error:
             self.statusBar().showMessage(view.error, 8000)
+        self._update_attention_badge(view)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
         if terminal and view.hold_min_c is not None and "hold_low" not in self._markers_run:
             self.show_hold_minimum_temperature_marker(view.hold_min_time_s, view.hold_min_c)
@@ -336,13 +371,20 @@ class KilnWindow(gui.OvenWindow):
     def show_run_events(self):
         view, _ = self.service.snapshot()
         events = (self._historical_record or {}).get("events", ()) if self._historical_record else view.events
+        events = list(events) + [event for event in self._attention_events
+                                 if event.get("type") == "attention"]
         if not events:
             text = "No events recorded for this run."
         else:
             lines = []
             for event in events:
                 elapsed = event["elapsed_s"]
-                line = f"{int(elapsed // 60):02d}:{elapsed % 60:05.2f}  {event['description']}"
+                severity = event.get("severity")
+                if severity is None:
+                    severity = {"run_faulted": "error", "emergency_stop": "error",
+                                "run_paused": "warning"}.get(event.get("type"))
+                tag = f"[{severity.upper()}] " if severity else ""
+                line = f"{int(elapsed // 60):02d}:{elapsed % 60:05.2f}  {tag}{event['description']}"
                 changes = event.get("changes", {})
                 if changes:
                     values = ", ".join(
@@ -364,7 +406,57 @@ class KilnWindow(gui.OvenWindow):
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
+        self._unread_attention.clear()
+        self._update_attention_badge(view)
         dialog.exec()
+
+    def _update_attention_badge(self, view):
+        def add_attention(key, severity, description, elapsed_s=0.0, event_type="attention"):
+            if key in self._seen_attention:
+                return
+            self._seen_attention.add(key)
+            event = {"elapsed_s": elapsed_s, "type": event_type,
+                     "description": description, "severity": severity}
+            self._attention_events.append(event)
+            self._unread_attention[key] = event
+
+        blocked = (getattr(view, "state", "ready") in ("ready", "complete", "aborted", "fault", "e_stop")
+                   and not getattr(view, "can_start", True))
+        if blocked:
+            reason = getattr(view, "ready_reason", "Process cannot start")
+            severity = "error" if any(word in reason.lower() for word in
+                                        ("fault", "invalid", "above", "emergency", "error")) else "warning"
+            if reason != self._active_startup_reason:
+                add_attention(("startup", len(self._attention_events), reason), severity,
+                              f"Cannot start: {reason}")
+            self._active_startup_reason = reason
+        else:
+            self._active_startup_reason = None
+        run_key = getattr(view, "run_started_at", None) or "current"
+        for event in (() if self._historical_record is not None else getattr(view, "events", ())):
+            event_type = event.get("type", "")
+            severity = {"run_faulted": "error", "emergency_stop": "error",
+                        "run_paused": "warning"}.get(event_type)
+            if severity:
+                key = (run_key, event.get("elapsed_s"), event_type, event.get("description"))
+                add_attention(key, severity, event.get("description", "Attention event"),
+                              event.get("elapsed_s", 0.0), event_type)
+        self._refresh_event_log_icon()
+
+    def _refresh_event_log_icon(self):
+        color = None
+        if self._unread_attention:
+            color = "#e34b4b" if any(item["severity"] == "error"
+                                     for item in self._unread_attention.values()) else "#f4c542"
+        pixmap = self._event_log_base_icon.pixmap(QtCore.QSize(24, 24))
+        if color:
+            painter = QtGui.QPainter(pixmap)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#252b31"), 1.5))
+            painter.setBrush(QtGui.QColor(color))
+            painter.drawEllipse(QtCore.QPointF(20, 4), 4.0, 4.0)
+            painter.end()
+        self.event_log_action.setIcon(QtGui.QIcon(pixmap))
 
     def closeEvent(self, event):
         self._timer.stop()
