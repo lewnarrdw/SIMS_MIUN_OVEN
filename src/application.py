@@ -67,6 +67,7 @@ class Application:
         self._current_temperature_c = None
         self._sensor_age_s = float("inf")
         self._estop_active = False
+        self._estop_latched = threading.Event()
         self._manual_override_active = False
         self._closing = threading.Event()
         self._closed = False
@@ -75,13 +76,14 @@ class Application:
         self.hw.buttons["open"].when_pressed = lambda: self.command("open")
         self.hw.buttons["close"].when_pressed = lambda: self.command("close")
         callback = lambda: self._emergency_cut("emergency_stop")
-        if config.ESTOP_NORMALLY_CLOSED: self.hw.estop_device.when_released = callback
-        else: self.hw.estop_device.when_pressed = callback
+        if config.ESTOP_NORMALLY_CLOSED: self.hw.estop_device.when_deactivated = callback
+        else: self.hw.estop_device.when_activated = callback
         self._thread = threading.Thread(target=self._run, name="kiln-control", daemon=False)
         self._thread.start()
     def command(self, name, values=None):
         self.commands.put((name, values))
     def _emergency_cut(self, reason):
+        self._estop_latched.set()
         self._manual_override_active = False
         self.hw.heater.emergency_off()
         self.hw.motor.stop()
@@ -219,6 +221,12 @@ class Application:
             try: name, value = self.commands.get_nowait()
             except Empty: return
             try:
+                if (self.controller.state in (State.E_STOP, State.FAULT)
+                        and name in ("start", "open", "close", "heater_on")):
+                    raise RuntimeError("Safety fault is latched; reset it before using the heater or door")
+                if (self._estop_latched.is_set()
+                        and name in ("start", "open", "close", "heater_on")):
+                    raise RuntimeError("Emergency stop is engaged; release it and reset before using the heater or door")
                 if name == "start":
                     if self.controller.state == State.PAUSED:
                         fault = self.controller.safety.check(
@@ -276,6 +284,7 @@ class Application:
                 elif name == "reset":
                     self._manual_override_active = False
                     self.controller.reset(now, temperature, age, self.hw.estop())
+                    self._estop_latched.clear()
                     self._run_started_monotonic = None
                     self._event_log_closed = True
                     self._pending_pid_event = None
@@ -344,6 +353,8 @@ class Application:
                 self._current_temperature_c = temperature
                 self._sensor_age_s = age
                 self._estop_active = self.hw.estop()
+                if self._estop_active:
+                    self._estop_latched.set()
                 self.hw.motor.update(now)
                 self._apply_commands(now, temperature, age)
                 if self.controller.active and self.controller.state != State.PAUSED and temperature is not None:

@@ -3,37 +3,12 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import gui
 from application import Application
 from data_manager import DataManager
 
-
-class _ImportPreviewService:
-    """Minimal inert service for temporarily previewing imported runs on Windows."""
-
-    last_run_record = None
-
-    def __init__(self):
-        self._view = SimpleNamespace(
-            running=False, stage=0, fraction=0.0, detail="", status="Ready to run",
-            elapsed_s=0.0, target_c=config.MIN_SETPOINT, output_percent=0.0,
-            door="unknown", state="ready", peak_time_s=None, peak_c=None,
-            hold_min_time_s=None, hold_min_c=None, hold_completed=False,
-            hold_reached_s=None, cooldown_s=None, stop_state=None,
-            stop_elapsed_s=None, error="", events=(), run_started_at=None,
-        )
-
-    def snapshot(self):
-        return self._view, []
-
-    def command(self, _name, _values=None):
-        return None
-
-    def close(self):
-        return None
 
 class KilnWindow(gui.OvenWindow):
     """Thin view adapter; device work stays in Application's worker."""
@@ -465,22 +440,6 @@ class KilnWindow(gui.OvenWindow):
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-
-    # TEMPORARY WINDOWS import preview: it starts no service or hardware.
-    if sys.platform == "win32":
-        window = KilnWindow(_ImportPreviewService())
-        window.setWindowTitle("Oven Controller (UI only - no hardware)")
-        for toolbar in window.findChildren(QtWidgets.QToolBar):
-            for action in toolbar.actions():
-                if (toolbar.widgetForAction(action) not in (window.file_button, window.manual_button)
-                        and action is not window.event_log_action):
-                    action.setEnabled(False)
-        for label, action in window.file_actions.items():
-            action.setEnabled(label == "Import run")
-        for action in window.manual_actions.values():
-            action.setEnabled(False)
-        window.show()
-        return app.exec()
 
     try:
         service = Application(config)

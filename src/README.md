@@ -1,12 +1,12 @@
-# Oven Controller
+# Raspberry Pi Oven Controller
 
-A PySide6 application for a kiln/oven controller, with a Windows simulator and a Raspberry Pi 5 hardware backend.
+A PySide6 application for a kiln/oven controller running on Raspberry Pi 5.
 
-## Run locally
+## Run on Raspberry Pi
 
-```powershell
+```sh
 python -m pip install -r requirements.txt
-python main.py
+python src/main.py
 ```
 
 ## Interface and controls
@@ -19,7 +19,7 @@ python main.py
 
 ## Hardware and control status
 
-The control worker owns sensor reads, the controller, and actuator updates, keeping blocking hardware work off the Qt UI thread. Windows starts in an import-preview mode without opening hardware. On Raspberry Pi, the hardware factory selects the Pi backend. Heater output is turned off on startup, pause/stop, errors, and shutdown.
+The control worker owns sensor reads, the controller, and actuator updates, keeping blocking hardware work off the Qt UI thread. The hardware factory selects the Raspberry Pi backend. Heater output is turned off on startup, pause/stop, errors, and shutdown.
 
 ## Development notes
 

@@ -1,6 +1,6 @@
 # Smart Mini Kiln controller (experimental)
 
-This repository contains an experimental Raspberry Pi 5 kiln controller and a Windows simulator. The application code is under `src/`.
+This branch contains the Raspberry Pi 5 kiln controller. The application code is under `src/`.
 
 ## Start
 
