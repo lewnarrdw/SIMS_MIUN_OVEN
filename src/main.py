@@ -96,10 +96,11 @@ class KilnWindow(gui.OvenWindow):
             self.hold_input.value() + gui.GRAPH_INITIAL_BUFFER_S,
         )
         self._set_graph_time_extent(self._live_graph_x_max)
-        self.graph_item.setXRange(0, self._live_graph_x_max, padding=0)
+        self._set_graph_x_range(self._live_graph_x_max)
         self.temperature_curve.setData([], [])
         self.duty_curve.setData([], [])
         self.goal_curve.setData([], [])
+        self.planned_curve.setData([], [])
         self.service.command("start")
 
     def stop_process(self):
@@ -113,6 +114,7 @@ class KilnWindow(gui.OvenWindow):
         self._clear_temperature_markers()
         self._markers_run.clear()
         self.service.command("reset")
+        self._update_profile_preview()
 
     def refresh(self):
         live_view, live_samples = self.service.snapshot()
@@ -149,7 +151,7 @@ class KilnWindow(gui.OvenWindow):
                     self._live_graph_x_max * gui.GRAPH_EXPANSION_FACTOR,
                     time_extent_s * gui.GRAPH_EXPANSION_FACTOR,
                 )
-                self.graph_item.setXRange(0, self._live_graph_x_max, padding=0)
+                self._set_graph_x_range(self._live_graph_x_max)
         bounded_extent_s = max(
             time_extent_s,
             self._live_graph_x_max if self._historical_record is None else 0.0,
@@ -158,7 +160,9 @@ class KilnWindow(gui.OvenWindow):
         if samples:
             times = [row["elapsed_s"] for row in samples]
             self.temperature_curve.setData(times, [row["temperature_c"] for row in samples])
-            self.goal_curve.setData(times, [row["target_temperature_c"] for row in samples])
+            x_min, x_max = self.graph_item.vb.viewRange()[0]
+            target_c = samples[-1]["target_temperature_c"]
+            self.goal_curve.setData([x_min, x_max], [target_c, target_c])
             self.duty_curve.setData(times, [row["heater_output_percent"] for row in samples])
             if self._historical_record is not None:
                 end_s = self._historical_record["result"]["duration_s"]
@@ -172,11 +176,11 @@ class KilnWindow(gui.OvenWindow):
         state = view.state
         self.run_action.setText("Resume" if state == "paused" else "Run")
         self.run_action.setToolTip("Resume the paused run" if state == "paused" else "Start a new run")
-        progress_stage = {"heating": 0, "holding": 1, "cooling": 2,
-                          "paused": max(0, (getattr(view, "stop_stage", None) or 1) - 1),
-                          "complete": 3}.get(state, -1)
+        progress_stage = {"ready": 0, "heating": 1, "holding": 2, "cooling": 3,
+                          "paused": max(1, min(3, getattr(view, "stop_stage", None) or 1)),
+                          "complete": 4}.get(state, -1)
         if state == "aborted":
-            progress_stage = max(0, min(2, (getattr(view, "stop_stage", None) or 1) - 1))
+            progress_stage = max(1, min(3, getattr(view, "stop_stage", None) or 1))
         if state in ("paused", "aborted") and getattr(view, "stop_state", None) == "door_moving":
             progress_stage = -1
         self.progress.set_progress(progress_stage, view.fraction, view.detail)
@@ -217,10 +221,16 @@ class KilnWindow(gui.OvenWindow):
 
         minutes, seconds = divmod(view.elapsed_s, 60.0)
         self.elapsed_label.setText(f"Elapsed: {int(minutes):02d}:{seconds:04.1f}")
-        temp_text = "N/A" if temperature is None else f"{temperature:.2f} °C"
         output = getattr(view, "output_percent", None)
-        output_text = "N/A" if output is None else f"{output:.1f}%"
-        self.temperature_label.setText(f"Temperature: {temp_text}    Output: {output_text}")
+        self.temperature_label.setText("N/A" if temperature is None else f"{temperature:.1f} °C")
+        self.output_label.setText("N/A" if output is None else f"{output:.0f} %")
+        self.target_status_label.setText(f"Target {view.target_c:.1f} °C")
+        hold_elapsed = getattr(view, "hold_elapsed_s", 0.0) or 0.0
+        hold_remaining = max(0.0, self.hold_input.value() - hold_elapsed)
+        hold_minutes, hold_seconds = divmod(hold_remaining, 60.0)
+        self.hold_remaining_label.setText(
+            f"Hold remaining  {int(hold_minutes):02d}:{int(hold_seconds):02d}"
+        )
         door_text = "N/A" if not view.door or view.door == "unknown" else view.door.title()
         self.door_label.setText(f"Door: {door_text}")
         color = "#4caf70" if view.door == "closed" else "#f4b942"

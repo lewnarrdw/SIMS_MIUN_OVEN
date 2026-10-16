@@ -1,0 +1,95 @@
+﻿Quiz based on gui.py
+
+Assistant: I’ve read gui.py and will use it as the quiz source. I’m asking one question at a time and will keep score; I won’t reveal the answer until you respond. Answer with A, B, C, or D.
+
+Question 1 of 10
+When does gui.py intend to show the maximum temperature marker on the graph?
+A. As soon as the run starts, using the current temperature
+B. Continuously during a run, whenever a new maximum is measured
+C. After a run completes successfully
+D. Whenever the operator stops or resets the run
+User: C
+Assistant: Correct. Score: 1/1.
+
+Question 2 of 10
+What happens when the graph’s fit button is used and temperature samples are available?
+A. It adjusts the graph to show the full run, with some padding around the data
+B. It restores the default 120-second view and clears the temperature samples
+C. It limits the graph to the latest 120 seconds and hides earlier samples
+D. It shows only the target temperature and removes the duty curve
+User: A
+Assistant: Correct. Score: 2/2.
+
+Question 3 of 10
+What is the purpose of StageProgress?
+A. Show the heater’s current output as a percentage
+B. Display the process stages as connected progress nodes
+C. Store the temperature samples for later export
+D. Preview the target and hold settings before a run starts
+User: B
+Assistant: Correct. Score: 3/3.
+
+Question 4 of 10
+How does the PID section behave initially?
+A. It is expanded, with all three PID terms disabled
+B. It is hidden until expanded, with each term enabled by default
+C. It is expanded, with only the proportional term enabled
+D. It is hidden until a run begins, then enabled automatically
+User: B
+Assistant: Correct. Score: 4/4.
+
+Question 5 of 10
+What does start_process() do in the code shown?
+A. Clears temperature markers left over from the previous run
+B. Resets the target and hold settings to their defaults
+C. Starts the control loop and enables heater output
+D. Imports the last saved run and displays its graph
+User: A
+Assistant: Correct. Score: 5/5.
+
+Question 6 of 10
+What does the run summary preview use for its example outcomes?
+A. Live samples collected from the oven hardware
+B. Fabricated values for completed and stopped runs
+C. Values loaded from the most recently exported run
+D. A fixed target curve with no temperature measurements
+User: B
+Assistant: Correct. Score: 6/6.
+
+Question 7 of 10
+Why does the preview add a “Stopped” marker for manually stopped or forced-stop examples?
+A. To mark where the run ended without treating it as a completed run peak
+B. To indicate the heater stayed on after the operator stopped the process
+C. To show that the run reached its target temperature before stopping
+D. To replace the target curve with the actual measured temperature curve
+User: A
+Assistant: Correct. Score: 7/7.
+
+Question 8 of 10
+What safety related limitation is visible in this file’s current implementation?
+A. Heater control is implemented in gui.py and can run on startup
+B. The “Heater off” menu action is wired to a blocking sleep
+C. Several process and manual action methods are placeholders
+D. The application exits automatically whenever the graph reaches 50 °C
+User: B
+Assistant: That’s incorrect. Score: 7/8. In the shown file, several actions—including manual_command()—are placeholders, so heater behavior isn’t implemented there.
+
+Question 9 of 10
+What does fit_graph_to_data() use to choose the graph’s vertical range?
+A. The temperature samples, plus the goal curve if it has data
+B. Only the fixed 0–50 °C display range
+C. The PID settings and target temperature
+D. Only the first and last measured temperatures
+User: A
+Assistant: Correct. Score: 8/9.
+
+Question 10 of 10
+What is the main purpose of _layout_temperature_markers()?
+A. Keep marker labels and points readable by repositioning them in the graph
+B. Calculate the peak temperature from the stored run samples
+C. Remove marker annotations whenever the graph is resized
+D. Align the duty curve with the target temperature line
+User: A
+Assistant: Correct. Final score: 9/10. You met the 8/10 requirement.
+
+Reflection note: The quiz helped identify the difference between intended interface behavior and code that is actually wired up. Several controls, including manual commands, are placeholders, so gui.py alone does not implement heater control.

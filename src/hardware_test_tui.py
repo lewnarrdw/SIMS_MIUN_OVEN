@@ -1,8 +1,8 @@
 """Standalone, numbered Raspberry Pi GPIO diagnostic menu for the oven.
 
 Run with ``python hardware_test_tui.py`` on the Pi. GPIO and SPI packages are
-imported only when the relevant hardware is initialized. The heater is never
-energized by this diagnostic tool.
+imported only when the relevant hardware is initialized. Heater testing is a
+brief, interlocked pulse; all outputs are off at startup and shutdown.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Any
 import config
 
 MANUAL_OVERRIDE_MAX_S = 10.0
+HEATER_TEST_MAX_S = 1.0
 
 
 def line(message: str = "") -> None:
@@ -38,6 +39,7 @@ class PiDiagnostics:
         self.outputs: dict[str, Any] = {}
         self.probe: Any = None
         self.sensor_error: str | None = None
+        self.heater_error: str | None = None
 
         def button(name: str, pin: int) -> Any:
             try:
@@ -89,6 +91,10 @@ class PiDiagnostics:
             self.inputs["E-STOP circuit"] = estop_input
 
             active_high = not config.RELAY_ACTIVE_LOW
+            try:
+                output("Heater", config.HEATER_PIN, active_high)
+            except Exception as exc:
+                self.heater_error = f"{type(exc).__name__}: {exc}"
             output("Motor IN1 (open)", config.MOTOR_IN1_PIN)
             output("Motor IN2 (close)", config.MOTOR_IN2_PIN)
             if config.MOTOR_ENABLE_PIN is not None:
@@ -100,9 +106,8 @@ class PiDiagnostics:
             raise
 
     def estop_active(self) -> bool:
-        # DigitalInputDevice.is_active is LOW with its pull-up enabled.
-        low = self.inputs["E-STOP circuit"].is_active
-        return not low if config.ESTOP_NORMALLY_CLOSED else low
+        input_active = self.inputs["E-STOP circuit"].is_active
+        return input_active if config.ESTOP_NORMALLY_CLOSED else not input_active
 
     def door_state(self) -> str:
         opened = self.inputs["Door open limit"].is_active
@@ -123,6 +128,11 @@ class PiDiagnostics:
                 self.probe = Max31865Probe(config)
             except Exception as exc:
                 self.sensor_error = f"{type(exc).__name__}: {exc}"
+                if config.TEMP_CS_PIN in (7, 8) and "busy" in str(exc).lower():
+                    self.sensor_error += (
+                        f"; BCM GPIO{config.TEMP_CS_PIN} is SPI CE{1 if config.TEMP_CS_PIN == 7 else 0}. "  # noqa: E501
+                        "Use a free GPIO for MAX31865 chip select and leave SPI CE pins unused."
+                    )
         if self.probe is None:
             line(f"[SENSOR ERROR] Could not initialize MAX31865: {self.sensor_error}")
             return None
@@ -245,12 +255,41 @@ class PiDiagnostics:
             output.off()
             line(f"[SAFE] {name} signal off.")
 
-    def heater_off_check(self) -> None:
-        line("[SKIPPED] Heater is not connected, so BCM GPIO7 is not initialized or tested.")
-        line("The heater output is never energized by this diagnostic tool.")
+    def test_heater(self) -> None:
+        """Pulse the heater output briefly after checking basic interlocks."""
+        if "Heater" not in self.outputs:
+            line(f"[HEATER ERROR] Cannot claim BCM GPIO{config.HEATER_PIN}: {self.heater_error}")
+            if config.HEATER_PIN in (7, 8):
+                line("This is also an SPI CE pin; disable/reassign that SPI chip select or move the heater control wire.")
+            return
+        if self.estop_active():
+            line("[BLOCKED] E-STOP is active; heater remains off.")
+            return
+        if self.door_state() != "CLOSED":
+            line("[BLOCKED] Door must report CLOSED at its limit; heater remains off.")
+            return
+        temperature = self.read_temperature()
+        if temperature is None or temperature >= config.MAX_TEMPERATURE:
+            line(f"[BLOCKED] Need a valid temperature below {config.MAX_TEMPERATURE:g} C; heater remains off.")
+            return
+        line(f"[ACTION] Heater relay test is limited to {HEATER_TEST_MAX_S:g} second.")
+        if input("Clear the oven area, then type HEATER to pulse the output: ").strip().upper() != "HEATER":
+            line("[CANCELLED] Heater remains off.")
+            return
+        heater = self.outputs["Heater"]
+        heater.off()
+        try:
+            heater.on()
+            line("[ON] Heater output active; observe the relay/indicator. Ctrl+C stops early.")
+            time.sleep(HEATER_TEST_MAX_S)
+        except KeyboardInterrupt:
+            line("[STOP] Heater test interrupted.")
+        finally:
+            heater.off()
+            line("[SAFE] Heater output is off.")
 
     def close(self) -> None:
-        for name in ("Motor IN1 (open)", "Motor IN2 (close)", "Motor enable"):
+        for name in ("Heater", "Motor IN1 (open)", "Motor IN2 (close)", "Motor enable"):
             device = self.outputs.get(name)
             if device is not None:
                 try:
@@ -315,7 +354,7 @@ def show_page_two(hw: PiDiagnostics) -> str:
         line("6. Pulse green signal")
         line("7. Pulse white signal")
         line("8. Pulse buzzer")
-        line("9. Heater test status (skipped; heater is not connected)")
+        line("9. Heater relay pulse test (1 second; checks E-STOP, closed door, and temperature)")
         line("10. Go to inputs / sensor page")
         line("11. Test door motor without a temperature sensor (E-STOP/limits/timeout remain active)")
         line("12. Manual door override (bypasses E-STOP, temperature, and limit inputs)")
@@ -336,7 +375,7 @@ def show_page_two(hw: PiDiagnostics) -> str:
             hw.test_signal(signal)
             pause()
         elif choice == "9":
-            hw.heater_off_check()
+            hw.test_heater()
             pause()
         elif choice == "10":
             return "inputs"
@@ -364,7 +403,7 @@ def show_page_two(hw: PiDiagnostics) -> str:
 def main() -> int:
     line("Raspberry Pi 5 oven hardware diagnostic")
     line("DB25 / BCM mapping is from All_pinnar.docx and config.py.")
-    line("Heater tests are OFF-only. Door motion can be stopped with Ctrl+C.")
+    line("Heater pulse test is limited to 1 second and requires E-STOP released, door closed, and a valid cool sensor reading.")
     try:
         hardware = PiDiagnostics()
     except Exception as exc:
