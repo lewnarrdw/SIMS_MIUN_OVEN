@@ -34,15 +34,18 @@ def create_hardware(config):
         devices.append(device)
         return device
 
-    def button(pin):
-        device = Button(pin, pull_up=True, bounce_time=0.05)
+    def button(pin, active_low=True):
+        device = Button(pin, pull_up=active_low, bounce_time=0.05)
         devices.append(device)
         return device
 
     try:
-        heater = Heater(output(config.HEATER_PIN, not config.RELAY_ACTIVE_LOW), config.HEATER_WINDOW_S)
-        opened = DigitalInputDevice(config.DOOR_LIMIT_OPEN_PIN, pull_up=True, active_state=False)
-        closed = DigitalInputDevice(config.DOOR_LIMIT_CLOSED_PIN, pull_up=True, active_state=False)
+        heater_active_low = getattr(config, "HEATER_ACTIVE_LOW", config.RELAY_ACTIVE_LOW)
+        heater = Heater(output(config.HEATER_PIN, not heater_active_low), config.HEATER_WINDOW_S)
+        # With an internal pull-up, gpiozero infers the active-low state.
+        # Explicit active_state is only valid when pull_up=None (floating).
+        opened = DigitalInputDevice(config.DOOR_LIMIT_OPEN_PIN, pull_up=True)
+        closed = DigitalInputDevice(config.DOOR_LIMIT_CLOSED_PIN, pull_up=True)
         devices.extend((opened, closed))
         switches = DoorSwitches(opened, closed)
         enable_pin = getattr(config, "MOTOR_ENABLE_PIN", None)
@@ -52,14 +55,15 @@ def create_hardware(config):
             motor_enable, switches, config.DOOR_TIMEOUT_S,
         )
         buttons = {
-            name: button(pin) for name, pin in {
+            name: button(pin, getattr(config, f"{name.upper()}_BUTTON_ACTIVE_LOW", True))
+            for name, pin in {
                 "start": config.BUTTON_START_PIN, "stop": config.BUTTON_STOP_PIN,
                 "open": config.BUTTON_OPEN_PIN, "close": config.BUTTON_CLOSE_PIN,
             }.items()
         }
         # Avoid Button bounce filtering on the safety input.
         estop_device = DigitalInputDevice(
-            config.ESTOP_SENSE_PIN, pull_up=True, active_state=False,
+            config.ESTOP_SENSE_PIN, pull_up=True,
         )
         devices.append(estop_device)
         estop = lambda: (
