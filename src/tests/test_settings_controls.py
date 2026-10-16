@@ -8,11 +8,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets
 
 from main import (
-    DEFAULT_HOLD_DURATION_S,
     DEFAULT_KD,
     DEFAULT_KI,
     DEFAULT_KP,
-    DEFAULT_TARGET_TEMPERATURE_C,
     OvenWindow,
 )
 
@@ -44,7 +42,7 @@ class SettingsControlTests(unittest.TestCase):
 
         self.assertFalse(self.window.target_input.isEnabled())
         self.assertFalse(self.window.hold_input.isEnabled())
-        self.assertFalse(self.window.restore_process_button.isEnabled())
+        self.assertFalse(self.window.restore_pid_button.isEnabled())
 
     def test_elapsed_time_stops_and_resets(self) -> None:
         self.window.start_process()
@@ -57,13 +55,15 @@ class SettingsControlTests(unittest.TestCase):
 
         self.window.reset_process()
         self.assertEqual(self.window.elapsed_label.text(), "Elapsed: 00:00.0")
-    def test_process_defaults_restore_when_stopped(self) -> None:
-        self.window.target_input.setValue(55.0)
-        self.window.hold_input.setValue(90.0)
-        self.window.restore_process_defaults()
+    def test_pid_inputs_match_process_input_size_and_use_subscripts(self) -> None:
+        process_size = self.window.target_input.size()
 
-        self.assertEqual(self.window.target_input.value(), DEFAULT_TARGET_TEMPERATURE_C)
-        self.assertEqual(self.window.hold_input.value(), DEFAULT_HOLD_DURATION_S)
+        for value_input in (self.window.kp_input, self.window.ki_input, self.window.kd_input):
+            self.assertEqual(value_input.size(), process_size)
+
+        self.assertEqual(self.window.kp_enable.text(), "Kp")
+        self.assertEqual(self.window.ki_enable.text(), "Ki")
+        self.assertEqual(self.window.kd_enable.text(), "Kd")
 
 
 if __name__ == "__main__":

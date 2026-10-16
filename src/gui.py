@@ -206,13 +206,22 @@ class PidTermCheckBox(QtWidgets.QCheckBox):
             painter.drawPath(mark)
 
         painter.setPen(QtGui.QColor("#b4bac3"))
-        font = painter.font()
+        font = QtGui.QFont("IBM Plex Sans")
+        font.setPointSizeF(10.5)  # 14 px, matching the HTML example's field labels.
         font.setWeight(QtGui.QFont.Weight.DemiBold)
         painter.setFont(font)
+        font_metrics = QtGui.QFontMetricsF(font)
+        baseline = (self.height() - font_metrics.height()) / 2 + font_metrics.ascent()
+        painter.drawText(QtCore.QPointF(24, baseline), "K")
+        subscript = self.text()[-1:]
+        subscript_font = QtGui.QFont(font)
+        subscript_font.setPointSizeF(8.0)
+        painter.setFont(subscript_font)
+        subscript_metrics = QtGui.QFontMetricsF(subscript_font)
         painter.drawText(
-            QtCore.QRectF(24, 0, self.width() - 24, self.height()),
-            QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft,
-            self.text(),
+            QtCore.QPointF(24 + font_metrics.horizontalAdvance("K"),
+                           baseline + subscript_metrics.ascent() * 0.55),
+            subscript,
         )
 
 
@@ -787,13 +796,6 @@ class OvenWindow(QtWidgets.QMainWindow):
         add_process_field("Target (°C)", self.target_input)
         add_process_field("Hold (m:ss)", self.hold_input)
 
-        default_button_style = (
-            "QPushButton { background: transparent; border: none; padding: 0 4px; color: #7fb8ea; text-align: left; }"
-            "QPushButton:hover { background: transparent; color: #a9d0f2; }"
-        )
-        self.restore_process_button = QtWidgets.QPushButton("Restore defaults")
-        self.restore_process_button.setStyleSheet(default_button_style)
-        self.restore_process_button.clicked.connect(self.restore_process_defaults)
         pid_section = QtWidgets.QFrame()
         pid_section.setObjectName("pidSection")
         pid_section.setStyleSheet("QFrame#pidSection { border-top: 1px solid #2a2f37; }")
@@ -816,6 +818,8 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.kp_input = self._spin(0.0, 10.0, DEFAULT_KP, decimals=2, step=0.01)
         self.ki_input = self._spin(0.0, 10.0, DEFAULT_KI, decimals=3, step=0.001)
         self.kd_input = self._spin(0.0, 10.0, DEFAULT_KD, decimals=2, step=0.01)
+        for value_input in (self.kp_input, self.ki_input, self.kd_input):
+            value_input.setFixedSize(120, 40)
         self.kp_enable = self._pid_checkbox("Kp", "Enable proportional action")
         self.ki_enable = self._pid_checkbox("Ki", "Enable integral action")
         self.kd_enable = self._pid_checkbox("Kd", "Enable derivative action")
@@ -837,7 +841,11 @@ class OvenWindow(QtWidgets.QMainWindow):
         pid_controls_layout.addWidget(self._pid_control_row(self.ki_enable, self.ki_input))
         pid_controls_layout.addWidget(self._pid_control_row(self.kd_enable, self.kd_input))
         self.restore_pid_button = QtWidgets.QPushButton("Restore defaults")
-        self.restore_pid_button.setStyleSheet(default_button_style)
+        self.restore_pid_button.setStyleSheet(
+            "QPushButton { background: transparent; border: none; padding: 0 4px; color: #7fb8ea; "
+            "text-align: left; font-family: 'IBM Plex Sans'; font-size: 10.5pt; font-weight: 500; }"
+            "QPushButton:hover { background: transparent; color: #a9d0f2; }"
+        )
         self.restore_pid_button.clicked.connect(self.restore_pid_defaults)
         pid_controls_layout.addWidget(self.restore_pid_button, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
         self.pid_controls.setVisible(False)
@@ -849,7 +857,6 @@ class OvenWindow(QtWidgets.QMainWindow):
             )
         )
         controls.addWidget(pid_section)
-        controls.addWidget(self.restore_process_button, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
         side.addWidget(controls_box)
         side.addStretch(1)
 
@@ -893,9 +900,10 @@ class OvenWindow(QtWidgets.QMainWindow):
         row = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
         layout.addWidget(checkbox)
-        layout.addWidget(value_input, 1)
+        layout.addStretch(1)
+        layout.addWidget(value_input)
         return row
 
     def _clear_temperature_markers(self) -> None:
