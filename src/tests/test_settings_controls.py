@@ -5,7 +5,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from main import (
     DEFAULT_KD,
@@ -64,6 +64,31 @@ class SettingsControlTests(unittest.TestCase):
         self.assertEqual(self.window.kp_enable.text(), "Kp")
         self.assertEqual(self.window.ki_enable.text(), "Ki")
         self.assertEqual(self.window.kd_enable.text(), "Kd")
+        for checkbox in (
+            self.window.kp_enable,
+            self.window.ki_enable,
+            self.window.kd_enable,
+        ):
+            self.assertIn("temperature error in °C", checkbox.toolTip())
+            self.assertIn("heater output in %", checkbox.toolTip())
+        self.assertEqual(self.window.pid_changes_note.text(), "Changes apply immediately")
+
+    def test_numeric_input_selection_clears_when_focus_leaves(self) -> None:
+        for value_input in (
+            self.window.target_input,
+            self.window.kp_input,
+            self.window.ki_input,
+            self.window.kd_input,
+        ):
+            value_input.lineEdit().selectAll()
+            QtWidgets.QApplication.sendEvent(
+                value_input.lineEdit(),
+                QtGui.QFocusEvent(
+                    QtCore.QEvent.Type.FocusOut,
+                    QtCore.Qt.FocusReason.OtherFocusReason,
+                ),
+            )
+            self.assertFalse(value_input.lineEdit().hasSelectedText())
 
 
 if __name__ == "__main__":

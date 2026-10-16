@@ -235,6 +235,8 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Oven Controller")
         self._build_toolbar()
         self._build_layout()
+        for control in (self.target_input, self.kp_input, self.ki_input, self.kd_input):
+            control.lineEdit().installEventFilter(self)
         self._apply_visual_theme()
         self._set_graph_auto_range_icon()
         self.resize(1280, 760)
@@ -245,6 +247,14 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.pid_toggle.setChecked(False)
         self.setMinimumHeight(expanded_window_height)
         self.resize(1280, expanded_window_height)
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if (
+            event.type() == QtCore.QEvent.Type.FocusOut
+            and isinstance(watched, QtWidgets.QLineEdit)
+        ):
+            watched.deselect()
+        return super().eventFilter(watched, event)
 
     def _apply_visual_theme(self) -> None:
         """Match the revised HTML reference without changing the window geometry."""
