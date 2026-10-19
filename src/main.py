@@ -49,6 +49,8 @@ class KilnWindow(gui.OvenWindow):
         self._seen_attention = set()
         self._active_startup_reason = None
         super().__init__()
+        self.restore_pid_button.clicked.disconnect(self.restore_pid_defaults)
+        self.restore_pid_button.clicked.connect(self.restore_defaults)
         self._event_log_base_icon = self.event_log_action.icon()
         self._live_graph_x_max = gui.GRAPH_WINDOW_S
         self._timer = QtCore.QTimer(self)
@@ -235,7 +237,7 @@ class KilnWindow(gui.OvenWindow):
         self.door_label.setText(f"Door: {door_text}")
         color = "#4caf70" if view.door == "closed" else "#f4b942"
         self.door_label.setStyleSheet(f"color: {color};")
-        for widget in (self.target_input, self.hold_input, self.restore_process_button):
+        for widget in (self.target_input, self.hold_input, self.restore_pid_button):
             widget.setEnabled(not view.running)
         if view.error:
             self.statusBar().showMessage(view.error, 8000)
@@ -377,6 +379,11 @@ class KilnWindow(gui.OvenWindow):
     def restore_process_defaults(self):
         self.target_input.setValue(min(45.0, config.MAX_SETPOINT))
         self.hold_input.setValue(60.0)
+
+    def restore_defaults(self):
+        """Restore process and PID settings from the single settings button."""
+        self.restore_process_defaults()
+        self.restore_pid_defaults()
 
     def show_run_events(self):
         view, _ = self.service.snapshot()
