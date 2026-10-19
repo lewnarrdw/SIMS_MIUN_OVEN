@@ -229,7 +229,7 @@ class KilnWindow(gui.OvenWindow):
         hold_remaining = max(0.0, self.hold_input.value() - hold_elapsed)
         hold_minutes, hold_seconds = divmod(hold_remaining, 60.0)
         self.hold_remaining_label.setText(
-            f"Hold remaining  {int(hold_minutes):02d}:{int(hold_seconds):02d}"
+            f"{int(hold_minutes):02d}:{int(hold_seconds):02d}"
         )
         door_text = "N/A" if not view.door or view.door == "unknown" else view.door.title()
         self.door_label.setText(f"Door: {door_text}")

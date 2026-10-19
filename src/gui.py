@@ -23,6 +23,8 @@ GRAPH_WINDOW_S = 120.0
 GRAPH_INITIAL_BUFFER_S = 120.0
 GRAPH_EXPANSION_TRIGGER = 0.8
 GRAPH_EXPANSION_FACTOR = 1.25
+GRAPH_AXIS_DIVISIONS = 5
+GRAPH_MIN_TIME_RANGE_S = 0.5
 FONT_ASSET_DIRECTORY = Path(__file__).resolve().parent / "assets" / "fonts"
 
 
@@ -109,47 +111,207 @@ class StageProgress(QtWidgets.QWidget):
                 stage,
             )
 
-class DurationSpinBox(QtWidgets.QDoubleSpinBox):
-    """Display a duration as minutes and seconds while storing total seconds."""
+class ThemedDoubleSpinBox(QtWidgets.QDoubleSpinBox):
+    """A double spin box with clear, style-positioned arrow glyphs."""
 
-    def textFromValue(self, value: float) -> str:
-        minutes, seconds = divmod(int(round(value)), 60)
-        return f"{minutes}:{seconds:02d}"
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        option = QtWidgets.QStyleOptionSpinBox()
+        option.initFrom(self)
+        option.frame = True
+        option.buttonSymbols = self.buttonSymbols()
+        style = self.style()
+        up_rect = style.subControlRect(
+            QtWidgets.QStyle.ComplexControl.CC_SpinBox,
+            option,
+            QtWidgets.QStyle.SubControl.SC_SpinBoxUp,
+            self,
+        )
+        down_rect = style.subControlRect(
+            QtWidgets.QStyle.ComplexControl.CC_SpinBox,
+            option,
+            QtWidgets.QStyle.SubControl.SC_SpinBoxDown,
+            self,
+        )
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor("#c3c8cf"))
+        for rect, upward in ((up_rect, True), (down_rect, False)):
+            center = rect.center()
+            half_width = 4
+            half_height = 2.5
+            if upward:
+                points = (
+                    QtCore.QPointF(center.x() - half_width, center.y() + half_height),
+                    QtCore.QPointF(center.x() + half_width, center.y() + half_height),
+                    QtCore.QPointF(center.x(), center.y() - half_height),
+                )
+            else:
+                points = (
+                    QtCore.QPointF(center.x() - half_width, center.y() - half_height),
+                    QtCore.QPointF(center.x() + half_width, center.y() - half_height),
+                    QtCore.QPointF(center.x(), center.y() + half_height),
+                )
+            painter.drawPolygon(points)
+        divider_pen = QtGui.QPen(QtGui.QColor("#343a43"), 1)
+        painter.setPen(divider_pen)
+        divider_y = (up_rect.bottom() + down_rect.top()) / 2
+        painter.drawLine(
+            QtCore.QPointF(up_rect.left(), divider_y),
+            QtCore.QPointF(up_rect.right(), divider_y),
+        )
 
-    def valueFromText(self, text: str) -> float:
-        parts = text.strip().split(":")
+
+class DurationSecondsInput(QtWidgets.QSpinBox):
+    """Integer seconds editor that always displays two digits."""
+
+    def textFromValue(self, value: int) -> str:
+        return f"{value:02d}"
+
+
+class DurationArrowButton(QtWidgets.QToolButton):
+    """Draw a spin-box arrow using the same small filled glyph as other fields."""
+
+    def __init__(self, upward: bool, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._upward = upward
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setAutoRaise(True)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor("#c3c8cf"))
+        center = self.rect().center()
+        half_width, half_height = 4, 2.5
+        if self._upward:
+            points = (
+                QtCore.QPointF(center.x() - half_width, center.y() + half_height),
+                QtCore.QPointF(center.x() + half_width, center.y() + half_height),
+                QtCore.QPointF(center.x(), center.y() - half_height),
+            )
+        else:
+            points = (
+                QtCore.QPointF(center.x() - half_width, center.y() - half_height),
+                QtCore.QPointF(center.x() + half_width, center.y() - half_height),
+                QtCore.QPointF(center.x(), center.y() + half_height),
+            )
+        painter.drawPolygon(points)
+
+
+class DurationSpinBox(QtWidgets.QWidget):
+    """Joined minute and second inputs that expose one total-seconds value."""
+
+    valueChanged = QtCore.Signal(float)
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._minimum = 0
+        self._maximum = 120
+        self._setting_value = False
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(1, 0, 1, 0)
+        layout.setSpacing(0)
+        self.setObjectName("durationInput")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QWidget#durationInput { border: 1px solid #343a43; border-radius: 6px;"
+            " background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 #15181c, stop:0.775 #15181c, stop:0.775 #1a1d22, stop:1 #1a1d22); }"
+            "QWidget#durationInput QSpinBox { min-height: 0; padding: 0; border: none; border-radius: 0;"
+            " background: transparent; color: #e4e7eb; font-family: 'IBM Plex Mono'; font-weight: 500; }"
+            "QWidget#durationInput QLineEdit { min-height: 0; padding: 0; border: none;"
+            " border-radius: 0; background: transparent; color: #e4e7eb; }"
+            "QWidget#durationInput QWidget#durationStepper { border: none; border-left: 1px solid #343a43;"
+            " border-radius: 0; background: transparent; }"
+            "QWidget#durationInput QToolButton { min-height: 0; padding: 0; border: none;"
+            " border-radius: 0; background: transparent; }"
+            "QWidget#durationInput QToolButton:hover { background: #262b32; }"
+        )
+        self.minutes_input = QtWidgets.QSpinBox(self)
+        self.minutes_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.minutes_input.setRange(0, 2)
+        self.minutes_input.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.minutes_input.setFixedWidth(24)
+        self.minutes_input.setFixedHeight(38)
+        separator = QtWidgets.QLabel(":", self)
+        separator.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        separator.setFixedWidth(4)
+        separator.setStyleSheet(
+            "border: none; background: transparent; color: #9aa1ab; font-family: 'IBM Plex Mono';"
+        )
+        self.seconds_input = DurationSecondsInput(self)
+        self.seconds_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.seconds_input.setRange(0, 59)
+        self.seconds_input.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.seconds_input.setFixedWidth(32)
+        self.seconds_input.setFixedHeight(38)
+        self.step_buttons = QtWidgets.QWidget(self)
+        self.step_buttons.setObjectName("durationStepper")
+        step_layout = QtWidgets.QVBoxLayout(self.step_buttons)
+        step_layout.setContentsMargins(0, 0, 0, 0)
+        step_layout.setSpacing(0)
+        self.step_up = DurationArrowButton(True, self.step_buttons)
+        self.step_down = DurationArrowButton(False, self.step_buttons)
+        self.step_up.setFixedSize(24, 18)
+        self.step_down.setFixedSize(24, 18)
+        divider = QtWidgets.QFrame(self.step_buttons)
+        divider.setFixedSize(24, 1)
+        divider.setStyleSheet("border: none; background: #343a43;")
+        step_layout.addWidget(self.step_up)
+        step_layout.addWidget(divider)
+        step_layout.addWidget(self.step_down)
+        layout.addStretch(1)
+        layout.addWidget(self.minutes_input)
+        layout.addWidget(separator)
+        layout.addWidget(self.seconds_input)
+        layout.addSpacing(8)
+        layout.addWidget(self.step_buttons)
+        self.step_buttons.setFixedSize(25, 38)
+        self.minutes_input.valueChanged.connect(self._parts_changed)
+        self.seconds_input.valueChanged.connect(self._parts_changed)
+        self.step_up.clicked.connect(lambda: self._step_duration(1))
+        self.step_down.clicked.connect(lambda: self._step_duration(-1))
+
+    def value(self) -> float:
+        return float(self.minutes_input.value() * 60 + self.seconds_input.value())
+
+    def setValue(self, total_seconds: float) -> None:
+        previous_value = self.value()
+        total = min(self._maximum, max(self._minimum, int(round(total_seconds))))
+        self._setting_value = True
         try:
-            if len(parts) == 1:
-                return float(int(parts[0]))
-            if len(parts) == 2:
-                return float(int(parts[0]) * 60 + int(parts[1]))
-        except ValueError:
-            pass
-        return float(self.minimum())
+            self.minutes_input.setValue(total // 60)
+            self.seconds_input.setValue(total % 60)
+        finally:
+            self._setting_value = False
+        self.step_up.setEnabled(total < self._maximum)
+        self.step_down.setEnabled(total > self._minimum)
+        if total != previous_value:
+            self.valueChanged.emit(float(total))
 
-    def validate(self, text: str, position: int):
-        text = text.strip()
-        if not text:
-            return QtGui.QValidator.State.Intermediate, text, position
-        parts = text.split(":")
-        if len(parts) == 1:
-            if not parts[0].isdigit():
-                return QtGui.QValidator.State.Invalid, text, position
-            state = (QtGui.QValidator.State.Acceptable
-                     if int(parts[0]) <= self.maximum()
-                     else QtGui.QValidator.State.Invalid)
-            return state, text, position
-        if len(parts) != 2 or not parts[0].isdigit():
-            return QtGui.QValidator.State.Invalid, text, position
-        if not parts[1]:
-            return QtGui.QValidator.State.Intermediate, text, position
-        if not parts[1].isdigit() or len(parts[1]) > 2 or int(parts[1]) > 59:
-            return QtGui.QValidator.State.Invalid, text, position
-        total_seconds = int(parts[0]) * 60 + int(parts[1])
-        state = (QtGui.QValidator.State.Acceptable
-                 if total_seconds <= self.maximum()
-                 else QtGui.QValidator.State.Invalid)
-        return state, text, position
+    def setRange(self, minimum: float, maximum: float) -> None:
+        self._minimum = int(round(minimum))
+        self._maximum = int(round(maximum))
+        self.minutes_input.setRange(0, self._maximum // 60)
+        self.setValue(self.value())
+
+    def _step_duration(self, direction: int) -> None:
+        self.setValue(self.value() + direction)
+
+    def _parts_changed(self, _part_value: int) -> None:
+        if self._setting_value:
+            return
+        total = min(self._maximum, max(self._minimum, int(self.value())))
+        if total != self.value():
+            self.setValue(total)
+        else:
+            self.step_up.setEnabled(total < self._maximum)
+            self.step_down.setEnabled(total > self._minimum)
+            self.valueChanged.emit(self.value())
 
 
 class TargetLegendMarker(QtWidgets.QWidget):
@@ -176,9 +338,11 @@ class PidTermCheckBox(QtWidgets.QCheckBox):
     """Compact themed PID toggle with a clear check or cross state marker."""
 
     def __init__(self, label: str, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(label, parent)
+        term, _, self.descriptor = label.partition("|")
+        super().__init__(term, parent)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.setMinimumWidth(44)
+        # Leave room for the custom-drawn subscript after the checkbox.
+        self.setMinimumSize(52, 28)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         del event
@@ -212,8 +376,9 @@ class PidTermCheckBox(QtWidgets.QCheckBox):
         painter.setFont(font)
         font_metrics = QtGui.QFontMetricsF(font)
         baseline = (self.height() - font_metrics.height()) / 2 + font_metrics.ascent()
+        term = self.text()
         painter.drawText(QtCore.QPointF(24, baseline), "K")
-        subscript = self.text()[-1:]
+        subscript = term[-1:]
         subscript_font = QtGui.QFont(font)
         subscript_font.setPointSizeF(8.0)
         painter.setFont(subscript_font)
@@ -223,6 +388,12 @@ class PidTermCheckBox(QtWidgets.QCheckBox):
                            baseline + subscript_metrics.ascent() * 0.55),
             subscript,
         )
+        descriptor_x = (
+            24 + font_metrics.horizontalAdvance("K")
+            + subscript_metrics.horizontalAdvance(subscript) + 5
+        )
+        painter.setFont(font)
+        painter.drawText(QtCore.QPointF(descriptor_x, baseline), self.descriptor)
 
 
 class OvenWindow(QtWidgets.QMainWindow):
@@ -279,12 +450,18 @@ class OvenWindow(QtWidgets.QMainWindow):
             QGroupBox::title { subcontrol-origin: margin; left: 18px; padding: 0 4px; }
             QLineEdit, QDoubleSpinBox, QSpinBox { min-height: 38px; padding: 0 10px;
                 border-radius: 6px; border: 1px solid #343a43; background: #15181c;
-                color: #e4e7eb; font-family: "IBM Plex Mono"; font-weight: 500; }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-                subcontrol-origin: border; subcontrol-position: top right; width: 24px; height: 18px;
-                border-left: 1px solid #343a43; background: #1a1d22; }
-            QDoubleSpinBox::down-button { subcontrol-position: bottom right; }
-            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #262b32; }
+                color: #e4e7eb; font-family: "IBM Plex Mono"; font-weight: 500;
+                selection-background-color: #20242a; selection-color: #f2f4f7; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button,
+            QSpinBox::up-button, QSpinBox::down-button {
+                subcontrol-origin: padding; subcontrol-position: top right; width: 24px; height: 19px;
+                border: none; border-left: 1px solid #343a43; background: #1a1d22; }
+            QDoubleSpinBox::up-button, QSpinBox::up-button {
+                border-top-right-radius: 5px; }
+            QDoubleSpinBox::down-button, QSpinBox::down-button {
+                subcontrol-position: bottom right; border-bottom-right-radius: 5px; }
+            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover,
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #262b32; }
             QPushButton { border: 1px solid #343a43; border-radius: 6px; padding: 7px 10px;
                 background: #1f2329; color: #e4e7eb; }
             QPushButton:hover { background: #262b32; border-color: #454c57; }
@@ -351,9 +528,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         toolbar = self.addToolBar("Process")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        toolbar.setIconSize(QtCore.QSize(22, 22))
+        toolbar.setIconSize(QtCore.QSize(16, 16))
         toolbar.setStyleSheet(
-            "QToolButton { min-height: 40px; border: 1px solid #2e333b; border-radius: 8px; padding: 0 14px; background-color: #1f2329; color: #e4e7eb; font-size: 10pt; font-weight: 500; }"
+            "QToolButton { min-height: 40px; border: 1px solid #2e333b; border-radius: 8px; padding: 0 14px; background-color: #1f2329; color: #e4e7eb; font-size: 10.5pt; font-weight: 500; }"
             "QToolButton:hover { background-color: #262b32; border-color: #9aa1ab; }"
             "QToolButton:pressed { background-color: #2e333b; border-color: #454c57; }"
         )
@@ -387,11 +564,10 @@ class OvenWindow(QtWidgets.QMainWindow):
 
         toolbar.addSeparator()
         self.event_log_action = QtGui.QAction("Event log", self)
-        self.event_log_action.setIcon(self._toolbar_icon("events", "#5aa9e6"))
+        self.event_log_action.setIcon(self._toolbar_icon("events", "#e4e7eb"))
         self.event_log_action.setToolTip("View events from this run")
         self.event_log_action.triggered.connect(self.show_run_events)
         toolbar.addAction(self.event_log_action)
-        toolbar.addSeparator()
 
         self.file_menu = QtWidgets.QMenu("File", self)
         self.file_actions: dict[str, QtGui.QAction] = {}
@@ -407,15 +583,14 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.file_actions["Import run"].setShortcut(QtGui.QKeySequence("Ctrl+O"))
         self.file_actions["Export run"].setShortcut(QtGui.QKeySequence("Ctrl+S"))
         self.file_button = QtWidgets.QToolButton(self)
-        self.file_button.setText("File  ▾")
+        self.file_button.setText("File  \u25be")
         self.file_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.file_button.setIcon(self._toolbar_icon("folder", "#5aa9e6"))
+        self.file_button.setIcon(self._toolbar_icon("folder", "#e4e7eb"))
         self.file_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.file_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         self.file_button.setMenu(self.file_menu)
         self.file_button.setToolTip("Import and export runs and settings")
         toolbar.addWidget(self.file_button)
-        toolbar.addSeparator()
 
         self.manual_menu = QtWidgets.QMenu("Manual controls", self)
         self.manual_actions: dict[str, QtGui.QAction] = {}
@@ -430,9 +605,9 @@ class OvenWindow(QtWidgets.QMainWindow):
             action.triggered.connect(lambda _checked=False, name=command_name: self.manual_command(name))
             self.manual_actions[label] = action
         self.manual_button = QtWidgets.QToolButton(self)
-        self.manual_button.setText("Manual controls  ▾")
+        self.manual_button.setText("Manual controls  \u25be")
         self.manual_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.manual_button.setIcon(self._toolbar_icon("controls", "#e8b33d"))
+        self.manual_button.setIcon(self._toolbar_icon("controls", "#e4e7eb"))
         self.manual_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.manual_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         self.manual_button.setMenu(self.manual_menu)
@@ -506,35 +681,30 @@ class OvenWindow(QtWidgets.QMainWindow):
                 painter.drawLine(QtCore.QPointF(8.5, 8.5), QtCore.QPointF(12, 5))
                 painter.drawLine(QtCore.QPointF(15.5, 8.5), QtCore.QPointF(12, 5))
         elif symbol == "events":
-            # A chronological event timeline on a page.
+            # Match the reference's outlined log page and three text lines.
             painter.drawRoundedRect(QtCore.QRectF(4, 3, 16, 18), 2, 2)
-            painter.drawLine(QtCore.QPointF(8, 6), QtCore.QPointF(8, 18))
-            for y, line_end in ((7, 17), (12, 16), (17, 18)):
-                painter.setBrush(QtGui.QColor(accent))
-                painter.drawEllipse(QtCore.QPointF(8, y), 1.25, 1.25)
-                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-                painter.drawLine(QtCore.QPointF(11, y), QtCore.QPointF(line_end, y))
+            for y, line_end in ((8, 16), (12, 16), (16, 13)):
+                painter.drawLine(QtCore.QPointF(8, y), QtCore.QPointF(line_end, y))
         elif symbol == "folder":
-            # A classic tabbed folder silhouette for run and settings files.
+            # Match the reference's outlined, tabbed folder.
             folder = QtGui.QPainterPath(QtCore.QPointF(3, 7))
-            folder.lineTo(9, 7)
-            folder.lineTo(11, 10)
-            folder.lineTo(21, 10)
-            folder.lineTo(19, 19)
-            folder.quadTo(18.8, 20, 17.5, 20)
-            folder.lineTo(4.5, 20)
-            folder.quadTo(3, 20, 3, 18.5)
+            folder.cubicTo(3, 5.9, 3.9, 5, 5, 5)
+            folder.lineTo(9, 5)
+            folder.lineTo(11, 7)
+            folder.lineTo(19, 7)
+            folder.cubicTo(20.1, 7, 21, 7.9, 21, 9)
+            folder.lineTo(21, 17)
+            folder.cubicTo(21, 18.1, 20.1, 19, 19, 19)
+            folder.lineTo(5, 19)
+            folder.cubicTo(3.9, 19, 3, 18.1, 3, 17)
             folder.closeSubpath()
-            painter.setBrush(QtGui.QColor(accent))
             painter.drawPath(folder)
         elif symbol == "controls":
-            # Three distinct adjustment tracks, the familiar tune/controls glyph.
-            for x, knob_y in ((6, 8), (12, 15), (18, 10)):
-                painter.drawLine(QtCore.QPointF(x, 4), QtCore.QPointF(x, knob_y - 2.5))
-                painter.drawLine(QtCore.QPointF(x, knob_y + 2.5), QtCore.QPointF(x, 20))
-                painter.setBrush(QtGui.QColor(accent))
-                painter.drawEllipse(QtCore.QPointF(x, knob_y), 2.5, 2.5)
+            # Match the reference's full-height sliders and outlined knobs.
+            for x, knob_y in ((6, 14), (12, 8), (18, 16)):
+                painter.drawLine(QtCore.QPointF(x, 4), QtCore.QPointF(x, 20))
                 painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(QtCore.QPointF(x, knob_y), 2, 2)
 
         painter.end()
         return QtGui.QIcon(pixmap)
@@ -566,9 +736,11 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.graph_item.layout.setContentsMargins(12, 8, 12, 0)
         self.graph_item.showAxis("right")
         self.graph_item.setLabel("right", "")
-        self.grid_item = pg.GridItem(pen=pg.mkPen("#343a43", width=1), textPen=None)
+        # Raise the grid above the translucent hold fill so it stays visible
+        # through that region, as it does in the HTML reference.
+        self.grid_item = pg.GridItem(pen=pg.mkPen("#59616d", width=1), textPen=None)
         self.grid_item.setTickSpacing(x=[20.0], y=[10.0])
-        self.grid_item.setZValue(-20)
+        self.grid_item.setZValue(-5)
         self.graph_item.addItem(self.grid_item, ignoreBounds=True)
         axis_font = QtGui.QFont()
         axis_font.setFamily("IBM Plex Mono")
@@ -591,11 +763,11 @@ class OvenWindow(QtWidgets.QMainWindow):
         bottom_axis.setStyle(showValues=True, tickFont=axis_font, tickTextOffset=8)
         bottom_axis.setTicks([[(value, str(value)) for value in range(10, int(GRAPH_WINDOW_S), 10)]])
         right_axis.setWidth(72)
-        self.graph_item.vb.setLimits(xMin=0, xMax=GRAPH_WINDOW_S, minXRange=5, maxXRange=GRAPH_WINDOW_S, yMin=0, yMax=MAX_TEMPERATURE_DISPLAY_C, minYRange=5, maxYRange=MAX_TEMPERATURE_DISPLAY_C)
+        self.graph_item.vb.setLimits(xMin=0, xMax=GRAPH_WINDOW_S, minXRange=GRAPH_MIN_TIME_RANGE_S, maxXRange=GRAPH_WINDOW_S, yMin=0, yMax=MAX_TEMPERATURE_DISPLAY_C, minYRange=0.5, maxYRange=MAX_TEMPERATURE_DISPLAY_C)
         self.graph_item.setXRange(0, GRAPH_WINDOW_S, padding=0)
         self.graph_item.setYRange(0, MAX_TEMPERATURE_DISPLAY_C, padding=0)
         self.duty_view = pg.ViewBox()
-        self.duty_view.setLimits(xMin=0, xMax=GRAPH_WINDOW_S, minXRange=5, maxXRange=GRAPH_WINDOW_S, yMin=0, yMax=MAX_OUTPUT_PERCENT, minYRange=5, maxYRange=MAX_OUTPUT_PERCENT)
+        self.duty_view.setLimits(xMin=0, xMax=GRAPH_WINDOW_S, minXRange=GRAPH_MIN_TIME_RANGE_S, maxXRange=GRAPH_WINDOW_S, yMin=0, yMax=MAX_OUTPUT_PERCENT, minYRange=5, maxYRange=MAX_OUTPUT_PERCENT)
         self.duty_view.setYRange(0, MAX_OUTPUT_PERCENT, padding=0)
         self.graph_item.scene().addItem(self.duty_view)
         right_axis.linkToView(self.duty_view)
@@ -614,6 +786,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         self._set_graph_x_range(GRAPH_WINDOW_S)
         self.graph_item.vb.sigResized.connect(self._resize_duty_view)
         self.graph_item.vb.sigResized.connect(self._position_x_endpoint_labels)
+        self.graph_item.vb.sigRangeChanged.connect(self._update_time_axis_ticks)
+        self.duty_view.sigRangeChanged.connect(self._update_time_axis_ticks)
+        self._update_time_axis_ticks()
         self.temperature_curve = self.graph.plot(name="Temperature", pen=pg.mkPen("#f0715f", width=3))
         self.temperature_curve.setZValue(10)
         self.temperature_marker_items: list[pg.GraphicsObject] = []
@@ -629,6 +804,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.goal_curve.setZValue(5)
         self.planned_curve = self.graph.plot(pen=target_pen)
         self.planned_curve.setZValue(4)
+        self.target_pen = target_pen
+        self.graph_item.vb.sigResized.connect(self._balance_target_dash_ends)
+        self._balance_target_dash_ends()
         self.hold_region = pg.LinearRegionItem(values=(30.0, 30.0 + DEFAULT_HOLD_DURATION_S),
                                                 movable=False, brush=pg.mkBrush(232, 179, 61, 20),
                                                 pen=pg.mkPen(None))
@@ -771,6 +949,12 @@ class OvenWindow(QtWidgets.QMainWindow):
         status.addWidget(stage_title)
         self.progress = StageProgress()
         status.addWidget(self.progress)
+        self.stage_label = QtWidgets.QLabel("Current stage: Ready to run")
+        self.stage_label.setStyleSheet("color: #e4e7eb; font-size: 10pt; font-weight: 500;")
+        status.addWidget(self.stage_label)
+        self.stage_detail_label = QtWidgets.QLabel("")
+        self.stage_detail_label.setStyleSheet("color: #9aa1ab; font-size: 9pt;")
+        status.addWidget(self.stage_detail_label)
         side.addWidget(status_box)
 
         controls_box = QtWidgets.QGroupBox()
@@ -786,10 +970,8 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.target_input.setFixedHeight(40)
         self.hold_input = DurationSpinBox()
         self.hold_input.setRange(1.0, MAX_DURATION_S)
-        self.hold_input.setDecimals(0)
-        self.hold_input.setSingleStep(1.0)
         self.hold_input.setValue(DEFAULT_HOLD_DURATION_S)
-        self.hold_input.setFixedHeight(40)
+        self.hold_input.setFixedSize(120, 40)
 
         def add_process_field(label_text: str, control: QtWidgets.QWidget) -> None:
             field = QtWidgets.QHBoxLayout()
@@ -825,14 +1007,16 @@ class OvenWindow(QtWidgets.QMainWindow):
         )
         pid_section_layout.addWidget(self.pid_toggle)
 
+        # Gains map temperature error/rate (°C) to heater output (%).
         self.kp_input = self._spin(0.0, 10.0, DEFAULT_KP, decimals=2, step=0.01)
         self.ki_input = self._spin(0.0, 10.0, DEFAULT_KI, decimals=3, step=0.001)
         self.kd_input = self._spin(0.0, 10.0, DEFAULT_KD, decimals=2, step=0.01)
         for value_input in (self.kp_input, self.ki_input, self.kd_input):
             value_input.setFixedSize(120, 40)
-        self.kp_enable = self._pid_checkbox("Kp", "Enable proportional action")
-        self.ki_enable = self._pid_checkbox("Ki", "Enable integral action")
-        self.kd_enable = self._pid_checkbox("Kd", "Enable derivative action")
+        gain_units = "Gain maps temperature error in °C to heater output in %."
+        self.kp_enable = self._pid_checkbox("Kp", f"Proportional action. {gain_units}")
+        self.ki_enable = self._pid_checkbox("Ki", f"Integral action. {gain_units}")
+        self.kd_enable = self._pid_checkbox("Kd", f"Derivative action. {gain_units}")
         self.pid_enable_inputs = (
             (self.kp_enable, self.kp_input),
             (self.ki_enable, self.ki_input),
@@ -850,6 +1034,15 @@ class OvenWindow(QtWidgets.QMainWindow):
         pid_controls_layout.addWidget(self._pid_control_row(self.kp_enable, self.kp_input))
         pid_controls_layout.addWidget(self._pid_control_row(self.ki_enable, self.ki_input))
         pid_controls_layout.addWidget(self._pid_control_row(self.kd_enable, self.kd_input))
+        self.pid_changes_note = QtWidgets.QLabel("Changes apply immediately")
+        self.pid_changes_note.setStyleSheet(
+            "color: #9aa1ab; font-family: 'IBM Plex Sans'; font-size: 9pt;"
+        )
+        note_row = QtWidgets.QHBoxLayout()
+        note_row.setContentsMargins(0, 0, 0, 0)
+        note_row.addStretch(1)
+        note_row.addWidget(self.pid_changes_note, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+        pid_controls_layout.addLayout(note_row)
         self.restore_pid_button = QtWidgets.QPushButton("Restore defaults")
         self.restore_pid_button.setStyleSheet(
             "QPushButton { background: transparent; border: none; padding: 0 4px; color: #7fb8ea; "
@@ -890,12 +1083,13 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _spin(minimum: float, maximum: float, value: float, suffix: str = "", decimals: int = 3, step: float | None = None) -> QtWidgets.QDoubleSpinBox:
-        control = QtWidgets.QDoubleSpinBox()
+        control = ThemedDoubleSpinBox()
         control.setRange(minimum, maximum)
         control.setDecimals(decimals)
         control.setValue(value)
         control.setSingleStep(step if step is not None else (1.0 if decimals == 0 else 0.01))
         control.setSuffix(suffix)
+        control.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         return control
 
     @staticmethod
@@ -1074,34 +1268,93 @@ class OvenWindow(QtWidgets.QMainWindow):
     def _resize_duty_view(self) -> None:
         self.duty_view.setGeometry(self.graph_item.vb.sceneBoundingRect())
 
+    def _balance_target_dash_ends(self) -> None:
+        """Give the dashed target line matching margins at both plot edges."""
+        plot_width = self.graph_item.vb.sceneBoundingRect().width()
+        pen_width = self.target_pen.widthF()
+        if plot_width <= 0 or pen_width <= 0:
+            return
+        width_in_dash_units = plot_width / pen_width
+        reference_dash, reference_gap = 4.0, 4.5
+        reference_period = reference_dash + reference_gap
+        cycle_count = max(1, round(width_in_dash_units / reference_period))
+        period = width_in_dash_units / cycle_count
+        dash_length = period * reference_dash / reference_period
+        gap_length = period - dash_length
+        self.target_pen.setDashPattern([dash_length, gap_length])
+        # Center the edge gaps, with a small correction for the ViewBox's
+        # rendered stroke span versus its reported scene bounds.
+        edge_alignment_correction = 2.0
+        self.target_pen.setDashOffset(
+            dash_length + gap_length / 2 - edge_alignment_correction
+        )
+        self.goal_curve.setPen(self.target_pen)
+        self.planned_curve.setPen(self.target_pen)
+
     def _set_graph_time_extent(self, end_s: float) -> None:
         """Keep panning bounded to the time covered by the current run."""
         x_max = math.ceil(max(GRAPH_WINDOW_S, end_s) / 20.0) * 20.0
-        self.graph_item.vb.setLimits(xMin=0, xMax=x_max, minXRange=5, maxXRange=x_max)
-        self.duty_view.setLimits(xMin=0, xMax=x_max, minXRange=5, maxXRange=x_max)
-        self._set_time_axis_ticks(x_max)
+        self.graph_item.vb.setLimits(xMin=0, xMax=x_max, minXRange=GRAPH_MIN_TIME_RANGE_S, maxXRange=x_max)
+        self.duty_view.setLimits(xMin=0, xMax=x_max, minXRange=GRAPH_MIN_TIME_RANGE_S, maxXRange=x_max)
 
     def _set_graph_x_range(self, x_max: float) -> None:
         """Keep the graph border aligned with zero and the final grid line."""
         x_max = math.ceil(max(GRAPH_WINDOW_S, x_max) / 20.0) * 20.0
         self.graph_item.setXRange(0, x_max, padding=0)
 
-    def _set_time_axis_ticks(self, x_max: float) -> None:
-        """Keep zero and the current right edge labeled on the time axis."""
-        last_regular_tick = int(x_max // 10) * 10
-        ticks = [(value, str(value)) for value in range(10, last_regular_tick, 10)]
-        self.graph_item.getAxis("bottom").setTicks([ticks])
-        self.x_axis_min_label.setText("0")
-        self.x_axis_max_label.setText(f"{x_max:g}")
+    @staticmethod
+    def _ticks_for_range(
+        minimum: float, maximum: float, precision: int,
+    ) -> list[tuple[float, str]]:
+        """Return equally spaced endpoint and interior ticks with distinct labels."""
+        step = (maximum - minimum) / GRAPH_AXIS_DIVISIONS
+        values = [
+            minimum + step * division
+            for division in range(GRAPH_AXIS_DIVISIONS + 1)
+        ]
+        scale = 10 ** precision
+        labels = []
+        for value in values:
+            rounded = math.floor(value * scale + 0.5 + 1e-9) / scale
+            labels.append(f"{rounded:.{precision}f}")
+        return list(zip(values, labels))
+
+    def _update_time_axis_ticks(self, *_args) -> None:
+        """Keep endpoint labels and equal divisions on each visible axis."""
+        x_min, x_max = self.graph_item.vb.viewRange()[0]
+        x_precision = 1 if x_max - x_min < 5.0 else 0
+        x_ticks = self._ticks_for_range(x_min, x_max, x_precision)
+        bottom_ticks = [(x_ticks[0][0], ""), *x_ticks[1:-1], (x_ticks[-1][0], "")]
+        self.graph_item.getAxis("bottom").setTicks([bottom_ticks])
+        self.x_axis_min_label.setText(x_ticks[0][1])
+        self.x_axis_max_label.setText(x_ticks[-1][1])
         self.x_axis_min_label.adjustSize()
         self.x_axis_max_label.adjustSize()
         self._position_x_endpoint_labels()
+
+        y_min, y_max = self.graph_item.vb.viewRange()[1]
+        temperature_precision = 1 if y_max - y_min < 5.0 else 0
+        self.graph_item.getAxis("left").setTicks([
+            self._ticks_for_range(y_min, y_max, temperature_precision)
+        ])
+        duty_min, duty_max = self.duty_view.viewRange()[1]
+        self.graph_item.getAxis("right").setTicks([
+            self._ticks_for_range(duty_min, duty_max, 0)
+        ])
+        x_step = (x_max - x_min) / GRAPH_AXIS_DIVISIONS
+        y_step = (y_max - y_min) / GRAPH_AXIS_DIVISIONS
+        self.grid_item.setTickSpacing(x=[x_step], y=[y_step])
+        self.grid_item.setPos(x_min, y_min)
 
     def _position_x_endpoint_labels(self, *_args) -> None:
         """Place endpoint text at the plot borders, clear of AxisItem clipping."""
         view_rect = self.graph_item.vb.sceneBoundingRect()
         axis_rect = self.graph_item.getAxis("bottom").sceneBoundingRect()
-        label_y = self.graph.mapFromScene(QtCore.QPointF(view_rect.center().x(), axis_rect.center().y())).y()
+        # The axis rect also contains the "Elapsed time" title below the ticks;
+        # align endpoints with the tick row near its top, not the rect center.
+        label_y = self.graph.mapFromScene(
+            QtCore.QPointF(view_rect.center().x(), axis_rect.top() + 21)
+        ).y()
         left_x = self.graph.mapFromScene(QtCore.QPointF(view_rect.left(), view_rect.center().y())).x()
         right_x = self.graph.mapFromScene(QtCore.QPointF(view_rect.right(), view_rect.center().y())).x()
         # Keep the endpoint labels inside the viewport; centering them on its
@@ -1142,10 +1395,6 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def restore_pid_defaults(self) -> None:
         pass
-
-    def restore_process_defaults(self) -> None:
-        pass
-
 
 def show_run_summary_preview(window: OvenWindow) -> None:
     """Display a disposable, fake-data run summary preview in the status panel."""
