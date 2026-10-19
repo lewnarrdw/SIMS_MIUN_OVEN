@@ -223,6 +223,9 @@ class DurationSpinBox(QtWidgets.QWidget):
             " stop:0 #15181c, stop:0.775 #15181c, stop:0.775 #1a1d22, stop:1 #1a1d22); }"
             "QWidget#durationInput QSpinBox { min-height: 0; padding: 0; border: none; border-radius: 0;"
             " background: transparent; color: #e4e7eb; font-family: 'IBM Plex Mono'; font-weight: 500; }"
+            # Styled spin boxes still reserve arrow space; collapse it so the digits stay visible.
+            "QWidget#durationInput QSpinBox::up-button, QWidget#durationInput QSpinBox::down-button {"
+            " subcontrol-origin: margin; width: 0px; height: 0px; border: none; }"
             "QWidget#durationInput QLineEdit { min-height: 0; padding: 0; border: none;"
             " border-radius: 0; background: transparent; color: #e4e7eb; }"
             "QWidget#durationInput QWidget#durationStepper { border: none; border-left: 1px solid #343a43;"
@@ -404,6 +407,8 @@ class OvenWindow(QtWidgets.QMainWindow):
         _load_ui_fonts()
         QtWidgets.QApplication.instance().setFont(QtGui.QFont("IBM Plex Sans", 10))
         self.setWindowTitle("Oven Controller")
+        self._emergency_stop_shown: tuple[bool, bool] | None = None
+        self._pre_emergency_enabled: dict[QtGui.QAction, bool] = {}
         self._build_toolbar()
         self._build_layout()
         for control in (self.target_input, self.kp_input, self.ki_input, self.kd_input):
@@ -452,16 +457,14 @@ class OvenWindow(QtWidgets.QMainWindow):
                 border-radius: 6px; border: 1px solid #343a43; background: #15181c;
                 color: #e4e7eb; font-family: "IBM Plex Mono"; font-weight: 500;
                 selection-background-color: #20242a; selection-color: #f2f4f7; }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button,
-            QSpinBox::up-button, QSpinBox::down-button {
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
                 subcontrol-origin: padding; subcontrol-position: top right; width: 24px; height: 19px;
                 border: none; border-left: 1px solid #343a43; background: #1a1d22; }
-            QDoubleSpinBox::up-button, QSpinBox::up-button {
+            QDoubleSpinBox::up-button {
                 border-top-right-radius: 5px; }
-            QDoubleSpinBox::down-button, QSpinBox::down-button {
+            QDoubleSpinBox::down-button {
                 subcontrol-position: bottom right; border-bottom-right-radius: 5px; }
-            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover,
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #262b32; }
+            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #262b32; }
             QPushButton { border: 1px solid #343a43; border-radius: 6px; padding: 7px 10px;
                 background: #1f2329; color: #e4e7eb; }
             QPushButton:hover { background: #262b32; border-color: #454c57; }
@@ -470,6 +473,12 @@ class OvenWindow(QtWidgets.QMainWindow):
             QMenu::item { padding: 6px 24px; }
             QMenu::item:selected { background: #262b32; }
             QFrame#plotPanel { background: #1c1f24; border: 1px solid #262a31; border-radius: 12px; }
+            QLineEdit:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled {
+                color: #6b7079; background: #1a1c20; border-color: #2a2e35; }
+            QWidget#centralWidget[emergencyStop="true"] { background-color: #3b1114; }
+            QToolBar[emergencyStop="true"] { background: #5a1418; border-bottom: 1px solid #e34b4b; }
+            QLabel#estopBanner { background: #c62828; color: white; border: 2px solid #ff6b6b;
+                border-radius: 10px; padding: 14px 18px; font-size: 16pt; font-weight: 600; }
         """)
     def _set_graph_auto_range_icon(self) -> None:
         """Use a fit-to-view glyph on Pyqtgraph's built-in auto-range button."""
@@ -526,6 +535,7 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Process")
+        self.process_toolbar = toolbar
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toolbar.setIconSize(QtCore.QSize(16, 16))
@@ -533,6 +543,7 @@ class OvenWindow(QtWidgets.QMainWindow):
             "QToolButton { min-height: 40px; border: 1px solid #2e333b; border-radius: 8px; padding: 0 14px; background-color: #1f2329; color: #e4e7eb; font-size: 10.5pt; font-weight: 500; }"
             "QToolButton:hover { background-color: #262b32; border-color: #9aa1ab; }"
             "QToolButton:pressed { background-color: #2e333b; border-color: #454c57; }"
+            "QToolButton:disabled { background-color: #2a1d20; border-color: #3b2a2e; color: #7a6a6d; }"
         )
         action_specs = (
             ("Run", self.start_process, "run", "#6fbf98"),
@@ -543,6 +554,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             action = QtGui.QAction(label, self)
             if label == "Run":
                 self.run_action = action
+            elif label == "Reset":
+                self.reset_action = action
             action.setIcon(self._toolbar_icon(icon_name, accent))
             action.setToolTip({
                 "Import": "Import process settings",
@@ -713,9 +726,19 @@ class OvenWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         central.setObjectName("centralWidget")
         self.setCentralWidget(central)
-        layout = QtWidgets.QHBoxLayout(central)
-        layout.setContentsMargins(18, 16, 18, 16)
+        page = QtWidgets.QVBoxLayout(central)
+        page.setContentsMargins(18, 16, 18, 16)
+        page.setSpacing(16)
+        self.estop_banner = QtWidgets.QLabel()
+        self.estop_banner.setObjectName("estopBanner")
+        self.estop_banner.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.estop_banner.setWordWrap(True)
+        self.estop_banner.hide()
+        page.addWidget(self.estop_banner)
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(18)
+        page.addLayout(layout, 1)
 
         graph_column = QtWidgets.QVBoxLayout()
         graph_column.setContentsMargins(0, 0, 0, 0)
@@ -954,10 +977,12 @@ class OvenWindow(QtWidgets.QMainWindow):
         status.addWidget(self.stage_label)
         self.stage_detail_label = QtWidgets.QLabel("")
         self.stage_detail_label.setStyleSheet("color: #9aa1ab; font-size: 9pt;")
+        self.stage_detail_label.setWordWrap(True)
         status.addWidget(self.stage_detail_label)
         side.addWidget(status_box)
 
         controls_box = QtWidgets.QGroupBox()
+        self.controls_box = controls_box
         controls = QtWidgets.QVBoxLayout(controls_box)
         controls.setContentsMargins(12, 12, 12, 12)
         controls.setSpacing(8)
@@ -1365,6 +1390,42 @@ class OvenWindow(QtWidgets.QMainWindow):
                                    label_y - self.x_axis_max_label.height() // 2)
         self.x_axis_min_label.raise_()
         self.x_axis_max_label.raise_()
+
+    def set_emergency_stop(self, engaged: bool, latched: bool) -> None:
+        """Turn the window red and lock operator controls while an E-Stop is in effect.
+
+        ``engaged`` means the physical E-Stop is pressed; ``latched`` means the
+        stop remains in effect until Reset, which is the only control offered
+        once the E-Stop has been released.
+        """
+        active = engaged or latched
+        previous = self._emergency_stop_shown
+        if (engaged, latched) == previous or (not active and previous is None):
+            return
+        actions = self.process_toolbar.actions()
+        if active and previous is None:
+            self._pre_emergency_enabled = {action: action.isEnabled() for action in actions}
+        if active:
+            for action in actions:
+                action.setEnabled(action is self.reset_action and not engaged)
+            self.controls_box.setEnabled(False)
+            self.estop_banner.setText(
+                "EMERGENCY STOP: the oven has been stopped. Release the E-Stop button to continue."
+                if engaged else
+                "E-Stop released. Press Reset to clear the emergency stop."
+            )
+            self.estop_banner.show()
+            self._emergency_stop_shown = (engaged, latched)
+        else:
+            for action, enabled in self._pre_emergency_enabled.items():
+                action.setEnabled(enabled)
+            self.controls_box.setEnabled(True)
+            self.estop_banner.hide()
+            self._emergency_stop_shown = None
+        for widget in (self.centralWidget(), self.process_toolbar):
+            widget.setProperty("emergencyStop", active)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
     def start_process(self) -> None:
         self._clear_temperature_markers()
