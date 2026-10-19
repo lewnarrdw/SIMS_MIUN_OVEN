@@ -5,7 +5,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets, QtTest
 
 from main import (
     DEFAULT_KD,
@@ -89,6 +89,40 @@ class SettingsControlTests(unittest.TestCase):
                 ),
             )
             self.assertFalse(value_input.lineEdit().hasSelectedText())
+
+    def test_hold_parts_accept_complete_keyboard_entries(self) -> None:
+        hold_input = self.window.hold_input
+        self.window.show()
+        self.app.processEvents()
+        hold_input.setValue(62)
+
+        seconds_editor = hold_input.seconds_input.lineEdit()
+        seconds_editor.setFocus()
+        seconds_editor.selectAll()
+        QtTest.QTest.keyClicks(seconds_editor, "45")
+        seconds_editor.clearFocus()
+        self.app.processEvents()
+        self.assertEqual(hold_input.value(), 105)
+        self.assertEqual(hold_input.seconds_input.value(), 45)
+        self.assertEqual(hold_input.seconds_input.lineEdit().text(), "45")
+
+        hold_input.setValue(45)
+        minutes_editor = hold_input.minutes_input.lineEdit()
+        minutes_editor.setFocus()
+        minutes_editor.selectAll()
+        QtTest.QTest.keyClicks(minutes_editor, "1")
+        minutes_editor.clearFocus()
+        self.app.processEvents()
+        self.assertEqual(hold_input.value(), 105)
+        self.assertEqual(hold_input.minutes_input.value(), 1)
+
+    def test_hold_parts_stay_compact_and_seconds_keep_leading_zero(self) -> None:
+        hold_input = self.window.hold_input
+        self.assertEqual(hold_input.minutes_input.width(), 22)
+        self.assertEqual(hold_input.seconds_input.width(), 22)
+        self.assertEqual(hold_input._separator.width(), 4)
+        hold_input.setValue(5)
+        self.assertEqual(hold_input.seconds_input.lineEdit().text(), "05")
 
 
 if __name__ == "__main__":

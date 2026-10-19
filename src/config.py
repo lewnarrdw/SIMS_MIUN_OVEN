@@ -1,11 +1,14 @@
 """Validated operating limits and Raspberry Pi pin configuration."""
 
-TEMP_CS_PIN = 8
+TEMP_CS_PIN = 18  # MAX31865 software chip select; keep SPI CE0/CE1 pins free.
 RTD_NOMINAL = 100.0
 RTD_REF_RESISTOR = 430.0
 RTD_WIRES = 3
-HEATER_PIN = 7
+# BCM GPIO7 is SPI CE1; use a free GPIO for the heater relay control instead.
+HEATER_PIN = 12
 HEATER_WINDOW_S = 1.0
+# The heater relay input is inactive when its GPIO signal is LOW.
+HEATER_ACTIVE_LOW = False
 MOTOR_IN1_PIN = 5
 MOTOR_IN2_PIN = 6
 MOTOR_ENABLE_PIN = None  # No enable/sleep signal is specified
@@ -16,6 +19,8 @@ TOWER_PINS = {"red": 22, "yellow": 17, "green": 23, "white": 24, "buzzer": 27}
 RELAY_ACTIVE_LOW = True
 BUTTON_START_PIN = 13
 BUTTON_STOP_PIN = 21
+# The unpressed stop input reads LOW; HIGH means pressed.
+STOP_BUTTON_ACTIVE_LOW = False
 BUTTON_OPEN_PIN = 19
 BUTTON_CLOSE_PIN = 26
 ESTOP_SENSE_PIN = 25
@@ -33,7 +38,7 @@ SENSOR_PERIOD_S = 1.0 / 15.0
 LOOP_PERIOD_S = 1.0
 FILTER_WINDOW = 15
 SENSOR_FAULT_TIMEOUT_S = 2.0
-PID_KP = 5.0
+PID_KP = 10.0
 PID_KI = 0.1
 PID_KD = 1.0
 ROOM_TEMPERATURE = 20.0

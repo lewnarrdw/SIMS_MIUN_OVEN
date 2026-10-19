@@ -26,7 +26,7 @@ TOWER_BCM = {
     "white": 24,
     "buzzer": 27,
 }
-TEMP_CS_BCM = 8
+TEMP_CS_BCM = 18
 MAX_MOTOR_SECONDS = 10.0
 RELAY_ACTIVE_LOW = True
 

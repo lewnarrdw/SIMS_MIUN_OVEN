@@ -154,13 +154,21 @@ class ThemedDoubleSpinBox(QtWidgets.QDoubleSpinBox):
                     QtCore.QPointF(center.x(), center.y() + half_height),
                 )
             painter.drawPolygon(points)
-        divider_pen = QtGui.QPen(QtGui.QColor("#343a43"), 1)
-        painter.setPen(divider_pen)
-        divider_y = (up_rect.bottom() + down_rect.top()) / 2
-        painter.drawLine(
-            QtCore.QPointF(up_rect.left(), divider_y),
-            QtCore.QPointF(up_rect.right(), divider_y),
+        divider_rect = QtCore.QRect(
+            up_rect.left() + 1,
+            down_rect.top(),
+            max(0, up_rect.width() - 2),
+            1,
         )
+        painter.fillRect(divider_rect, QtGui.QColor("#343a43"))
+        if self.hasFrame():
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#343a43"), 1))
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            shell_rect = QtCore.QRectF(
+                0.5, 0.5, self.width() - 1, self.height() - 1
+            )
+            painter.drawRoundedRect(shell_rect, 6, 6)
 
 
 class DurationSecondsInput(QtWidgets.QSpinBox):
@@ -170,148 +178,150 @@ class DurationSecondsInput(QtWidgets.QSpinBox):
         return f"{value:02d}"
 
 
-class DurationArrowButton(QtWidgets.QToolButton):
-    """Draw a spin-box arrow using the same small filled glyph as other fields."""
-
-    def __init__(self, upward: bool, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._upward = upward
-        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-        self.setAutoRaise(True)
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        super().paintEvent(event)
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(QtGui.QColor("#c3c8cf"))
-        center = self.rect().center()
-        half_width, half_height = 4, 2.5
-        if self._upward:
-            points = (
-                QtCore.QPointF(center.x() - half_width, center.y() + half_height),
-                QtCore.QPointF(center.x() + half_width, center.y() + half_height),
-                QtCore.QPointF(center.x(), center.y() - half_height),
-            )
-        else:
-            points = (
-                QtCore.QPointF(center.x() - half_width, center.y() - half_height),
-                QtCore.QPointF(center.x() + half_width, center.y() - half_height),
-                QtCore.QPointF(center.x(), center.y() + half_height),
-            )
-        painter.drawPolygon(points)
-
-
-class DurationSpinBox(QtWidgets.QWidget):
-    """Joined minute and second inputs that expose one total-seconds value."""
-
-    valueChanged = QtCore.Signal(float)
+class DurationSpinBox(ThemedDoubleSpinBox):
+    """Native spin-box shell with separately editable minute and second parts."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._minimum = 0
-        self._maximum = 120
-        self._setting_value = False
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(1, 0, 1, 0)
-        layout.setSpacing(0)
-        self.setObjectName("durationInput")
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(
-            "QWidget#durationInput { border: 1px solid #343a43; border-radius: 6px;"
-            " background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            " stop:0 #15181c, stop:0.775 #15181c, stop:0.775 #1a1d22, stop:1 #1a1d22); }"
-            "QWidget#durationInput QSpinBox { min-height: 0; padding: 0; border: none; border-radius: 0;"
-            " background: transparent; color: #e4e7eb; font-family: 'IBM Plex Mono'; font-weight: 500; }"
-            "QWidget#durationInput QLineEdit { min-height: 0; padding: 0; border: none;"
-            " border-radius: 0; background: transparent; color: #e4e7eb; }"
-            "QWidget#durationInput QWidget#durationStepper { border: none; border-left: 1px solid #343a43;"
-            " border-radius: 0; background: transparent; }"
-            "QWidget#durationInput QToolButton { min-height: 0; padding: 0; border: none;"
-            " border-radius: 0; background: transparent; }"
-            "QWidget#durationInput QToolButton:hover { background: #262b32; }"
+        self._updating_parts = False
+        self.setRange(0, 120)
+        self.setDecimals(0)
+        self.setSingleStep(1)
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+
+        line_edit = self.lineEdit()
+        line_edit.clear()
+        line_edit.setReadOnly(True)
+        line_edit.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        line_edit.setStyleSheet(
+            "QLineEdit { min-height: 0; padding: 0 10px; border: none;"
+            " border-radius: 0; background: transparent; color: transparent;"
+            " selection-color: transparent; selection-background-color: transparent; }"
         )
-        self.minutes_input = QtWidgets.QSpinBox(self)
+
+        self._editor = QtWidgets.QWidget(self)
+
+        self.minutes_input = QtWidgets.QSpinBox(self._editor)
         self.minutes_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.minutes_input.setKeyboardTracking(False)
         self.minutes_input.setRange(0, 2)
-        self.minutes_input.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self.minutes_input.setFixedWidth(24)
-        self.minutes_input.setFixedHeight(38)
-        separator = QtWidgets.QLabel(":", self)
-        separator.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        separator.setFixedWidth(4)
-        separator.setStyleSheet(
-            "border: none; background: transparent; color: #9aa1ab; font-family: 'IBM Plex Mono';"
+        self.minutes_input.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
-        self.seconds_input = DurationSecondsInput(self)
+        self.minutes_input.setStyleSheet(self._duration_part_style())
+        self.minutes_input.lineEdit().setTextMargins(0, 0, 0, 0)
+        self.minutes_input.setFixedSize(26, 38)
+        self.minutes_input.editingFinished.connect(self._commit_parts)
+
+        separator = QtWidgets.QLabel(":", self._editor)
+        separator.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        separator.setStyleSheet(
+            "border: none; background: transparent; color: #9aa1ab;"
+            " font-family: 'IBM Plex Mono';"
+        )
+        separator.setFixedSize(8, 38)
+
+        self.seconds_input = DurationSecondsInput(self._editor)
         self.seconds_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.seconds_input.setKeyboardTracking(False)
         self.seconds_input.setRange(0, 59)
-        self.seconds_input.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self.seconds_input.setFixedWidth(32)
-        self.seconds_input.setFixedHeight(38)
-        self.step_buttons = QtWidgets.QWidget(self)
-        self.step_buttons.setObjectName("durationStepper")
-        step_layout = QtWidgets.QVBoxLayout(self.step_buttons)
-        step_layout.setContentsMargins(0, 0, 0, 0)
-        step_layout.setSpacing(0)
-        self.step_up = DurationArrowButton(True, self.step_buttons)
-        self.step_down = DurationArrowButton(False, self.step_buttons)
-        self.step_up.setFixedSize(24, 18)
-        self.step_down.setFixedSize(24, 18)
-        divider = QtWidgets.QFrame(self.step_buttons)
-        divider.setFixedSize(24, 1)
-        divider.setStyleSheet("border: none; background: #343a43;")
-        step_layout.addWidget(self.step_up)
-        step_layout.addWidget(divider)
-        step_layout.addWidget(self.step_down)
-        layout.addStretch(1)
-        layout.addWidget(self.minutes_input)
-        layout.addWidget(separator)
-        layout.addWidget(self.seconds_input)
-        layout.addSpacing(8)
-        layout.addWidget(self.step_buttons)
-        self.step_buttons.setFixedSize(25, 38)
+        self.seconds_input.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.seconds_input.setStyleSheet(self._duration_part_style())
+        self.seconds_input.lineEdit().setTextMargins(0, 0, 0, 0)
+        self.seconds_input.setFixedSize(36, 38)
+        self.seconds_input.editingFinished.connect(self._commit_parts)
+
+        self._separator = separator
+        self._editor.raise_()
+
         self.minutes_input.valueChanged.connect(self._parts_changed)
         self.seconds_input.valueChanged.connect(self._parts_changed)
-        self.step_up.clicked.connect(lambda: self._step_duration(1))
-        self.step_down.clicked.connect(lambda: self._step_duration(-1))
+        self.valueChanged.connect(self._sync_parts)
 
-    def value(self) -> float:
-        return float(self.minutes_input.value() * 60 + self.seconds_input.value())
+    @staticmethod
+    def _duration_part_style() -> str:
+        return (
+            "QSpinBox { min-height: 0; padding: 0; border: none; border-radius: 0;"
+            " background: transparent; color: #e4e7eb; font-family: 'IBM Plex Mono';"
+            " font-weight: 500; }"
+            "QSpinBox QLineEdit { min-height: 0; padding: 0; border: none;"
+            " border-radius: 0; background: transparent; color: #e4e7eb; }"
+        )
 
-    def setValue(self, total_seconds: float) -> None:
-        previous_value = self.value()
-        total = min(self._maximum, max(self._minimum, int(round(total_seconds))))
-        self._setting_value = True
-        try:
-            self.minutes_input.setValue(total // 60)
-            self.seconds_input.setValue(total % 60)
-        finally:
-            self._setting_value = False
-        self.step_up.setEnabled(total < self._maximum)
-        self.step_down.setEnabled(total > self._minimum)
-        if total != previous_value:
-            self.valueChanged.emit(float(total))
+    def textFromValue(self, value: float) -> str:
+        return ""
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_editor"):
+            self._position_duration_editor()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if hasattr(self, "_editor"):
+            self._position_duration_editor()
+
+    def _position_duration_editor(self) -> None:
+        line_edit = self.lineEdit()
+        self._editor.setGeometry(line_edit.geometry())
+        option = QtWidgets.QStyleOptionFrame()
+        option.initFrom(line_edit)
+        option.rect = line_edit.rect()
+        content_rect = line_edit.style().subElementRect(
+            QtWidgets.QStyle.SubElement.SE_LineEditContents,
+            option,
+            line_edit,
+        )
+        content_left = max(0, content_rect.left())
+        content_right = min(self._editor.width(), content_rect.right() + 1)
+        duration_width = (
+            self.minutes_input.width()
+            + self._separator.width()
+            + self.seconds_input.width()
+        )
+        duration_left = max(content_left, content_right - duration_width)
+        minutes_x = duration_left
+        separator_x = minutes_x + self.minutes_input.width()
+        seconds_x = separator_x + self._separator.width()
+        self.minutes_input.move(minutes_x, 0)
+        self._separator.move(separator_x, 0)
+        self.seconds_input.move(seconds_x, 0)
+        self._editor.raise_()
 
     def setRange(self, minimum: float, maximum: float) -> None:
-        self._minimum = int(round(minimum))
-        self._maximum = int(round(maximum))
-        self.minutes_input.setRange(0, self._maximum // 60)
-        self.setValue(self.value())
+        super().setRange(minimum, maximum)
+        if hasattr(self, "minutes_input"):
+            self.minutes_input.setRange(0, int(maximum) // 60)
+            self._sync_parts(self.value())
 
-    def _step_duration(self, direction: int) -> None:
-        self.setValue(self.value() + direction)
+    def _sync_parts(self, total_seconds: float) -> None:
+        if not hasattr(self, "minutes_input"):
+            return
+        self._updating_parts = True
+        try:
+            total = int(round(total_seconds))
+            active_input = QtWidgets.QApplication.focusWidget()
+            for part_input, part_value in (
+                (self.minutes_input, total // 60),
+                (self.seconds_input, total % 60),
+            ):
+                if part_input is active_input and part_input.lineEdit().isModified():
+                    continue
+                part_input.setValue(part_value)
+        finally:
+            self._updating_parts = False
+
+    def _commit_parts(self) -> None:
+        self._sync_parts(self.value())
 
     def _parts_changed(self, _part_value: int) -> None:
-        if self._setting_value:
+        if self._updating_parts:
             return
-        total = min(self._maximum, max(self._minimum, int(self.value())))
-        if total != self.value():
-            self.setValue(total)
-        else:
-            self.step_up.setEnabled(total < self._maximum)
-            self.step_down.setEnabled(total > self._minimum)
-            self.valueChanged.emit(self.value())
+        total = self.minutes_input.value() * 60 + self.seconds_input.value()
+        self.setValue(max(self.minimum(), min(self.maximum(), total)))
 
 
 class TargetLegendMarker(QtWidgets.QWidget):
@@ -454,12 +464,18 @@ class OvenWindow(QtWidgets.QMainWindow):
                 selection-background-color: #20242a; selection-color: #f2f4f7; }
             QDoubleSpinBox::up-button, QDoubleSpinBox::down-button,
             QSpinBox::up-button, QSpinBox::down-button {
-                subcontrol-origin: padding; subcontrol-position: top right; width: 24px; height: 19px;
+                subcontrol-origin: border; subcontrol-position: top right;
+                right: 0px; width: 24px; height: 19px;
                 border: none; border-left: 1px solid #343a43; background: #1a1d22; }
             QDoubleSpinBox::up-button, QSpinBox::up-button {
-                border-top-right-radius: 5px; }
+                top: 1px; border-top-right-radius: 5px; }
             QDoubleSpinBox::down-button, QSpinBox::down-button {
-                subcontrol-position: bottom right; border-bottom-right-radius: 5px; }
+                subcontrol-position: bottom right; bottom: 1px; border-bottom-right-radius: 5px; }
+            QDoubleSpinBox:disabled { color: #9aa1ab; background-color: #15181c;
+                border-color: #343a43; }
+            QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled,
+            QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {
+                background: #1a1d22; border-left: 1px solid #343a43; }
             QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover,
             QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #262b32; }
             QPushButton { border: 1px solid #343a43; border-radius: 6px; padding: 7px 10px;
@@ -1024,9 +1040,6 @@ class OvenWindow(QtWidgets.QMainWindow):
         )
         for checkbox, value_input in self.pid_enable_inputs:
             checkbox.toggled.connect(value_input.setEnabled)
-            value_input.setStyleSheet(
-                "QDoubleSpinBox:disabled { color: #9aa1ab; background-color: #15181c; border-color: #343a43; }"
-            )
         self.pid_controls = QtWidgets.QWidget()
         pid_controls_layout = QtWidgets.QVBoxLayout(self.pid_controls)
         pid_controls_layout.setContentsMargins(0, 0, 0, 0)
