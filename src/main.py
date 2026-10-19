@@ -1,5 +1,6 @@
 """Raspberry Pi 5 kiln application entry point."""
 from __future__ import annotations
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -7,33 +8,9 @@ from types import SimpleNamespace
 from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import gui
-from application import Application
+from application import Application, describe_fault
 from data_manager import DataManager
 
-
-class _ImportPreviewService:
-    """Minimal inert service for temporarily previewing imported runs on Windows."""
-
-    last_run_record = None
-
-    def __init__(self):
-        self._view = SimpleNamespace(
-            running=False, stage=0, fraction=0.0, detail="", status="Ready to run",
-            elapsed_s=0.0, target_c=config.MIN_SETPOINT, output_percent=0.0,
-            door="unknown", state="ready", peak_time_s=None, peak_c=None,
-            hold_min_time_s=None, hold_min_c=None, hold_completed=False,
-            hold_reached_s=None, cooldown_s=None, stop_state=None,
-            stop_elapsed_s=None, error="", events=(), run_started_at=None,
-        )
-
-    def snapshot(self):
-        return self._view, []
-
-    def command(self, _name, _values=None):
-        return None
-
-    def close(self):
-        return None
 
 class KilnWindow(gui.OvenWindow):
     """Thin view adapter; device work stays in Application's worker."""
@@ -48,9 +25,9 @@ class KilnWindow(gui.OvenWindow):
         self._unread_attention = {}
         self._seen_attention = set()
         self._active_startup_reason = None
+        self._live_run_started_at = None
+        self._stage_detail_shows_fault = False
         super().__init__()
-        self.restore_pid_button.clicked.disconnect(self.restore_pid_defaults)
-        self.restore_pid_button.clicked.connect(self.restore_defaults)
         self._event_log_base_icon = self.event_log_action.icon()
         self._live_graph_x_max = gui.GRAPH_WINDOW_S
         self._timer = QtCore.QTimer(self)
@@ -67,6 +44,14 @@ class KilnWindow(gui.OvenWindow):
             widget.valueChanged.connect(self._sync_start_settings)
         for checkbox, _value_input in self.pid_enable_inputs:
             checkbox.toggled.connect(self._sync_start_settings)
+        # Fullscreen has no title bar, so offer Quit in the File menu and as Ctrl+Q.
+        self.quit_action = QtGui.QAction("Quit", self)
+        self.quit_action.setShortcut(QtGui.QKeySequence("Ctrl+Q"))
+        self.quit_action.setShortcutContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+        self.quit_action.triggered.connect(self.close)
+        self.addAction(self.quit_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.quit_action)
         self.restore_pid_defaults()
         self.restore_process_defaults()
         self._sync_start_settings()
@@ -84,25 +69,10 @@ class KilnWindow(gui.OvenWindow):
     def _sync_start_settings(self, *_):
         self.service.command("settings", self._settings())
 
+    # Toolbar and manual-menu buttons queue the same commands as the physical
+    # buttons (application.OPERATOR_BUTTON_COMMANDS); any view updates happen in
+    # refresh() so both input paths behave identically.
     def start_process(self):
-        view, _samples = self.service.snapshot()
-        if view.state == "paused":
-            self.service.command("start")
-            return
-        self._historical_record = None
-        self._last_run_record = None
-        self._clear_temperature_markers()
-        self._markers_run.clear()
-        self._live_graph_x_max = max(
-            gui.GRAPH_WINDOW_S,
-            self.hold_input.value() + gui.GRAPH_INITIAL_BUFFER_S,
-        )
-        self._set_graph_time_extent(self._live_graph_x_max)
-        self._set_graph_x_range(self._live_graph_x_max)
-        self.temperature_curve.setData([], [])
-        self.duty_curve.setData([], [])
-        self.goal_curve.setData([], [])
-        self.planned_curve.setData([], [])
         self.service.command("start")
 
     def stop_process(self):
@@ -110,6 +80,24 @@ class KilnWindow(gui.OvenWindow):
 
     def manual_command(self, name):
         self.service.command(name)
+
+    def _begin_live_run(self, view):
+        """Clear the graph for a new run, however it was started."""
+        self._historical_record = None
+        self._last_run_record = None
+        self._clear_temperature_markers()
+        self._markers_run.clear()
+        hold_duration_s = (view.run_settings or {}).get("hold_duration_s", self.hold_input.value())
+        self._live_graph_x_max = max(
+            gui.GRAPH_WINDOW_S,
+            hold_duration_s + gui.GRAPH_INITIAL_BUFFER_S,
+        )
+        self._set_graph_time_extent(self._live_graph_x_max)
+        self._set_graph_x_range(self._live_graph_x_max)
+        self.temperature_curve.setData([], [])
+        self.duty_curve.setData([], [])
+        self.goal_curve.setData([], [])
+        self.planned_curve.setData([], [])
 
     def reset_process(self):
         self._historical_record = None
@@ -120,6 +108,11 @@ class KilnWindow(gui.OvenWindow):
 
     def refresh(self):
         live_view, live_samples = self.service.snapshot()
+        self.set_emergency_stop(getattr(live_view, "estop_active", False), live_view.state == "e_stop")
+        run_started_at = getattr(live_view, "run_started_at", None)
+        if run_started_at is not None and run_started_at != self._live_run_started_at:
+            self._live_run_started_at = run_started_at
+            self._begin_live_run(live_view)
         if self._historical_record is not None and live_view.running:
             self._historical_record = None
             self._clear_temperature_markers()
@@ -219,6 +212,14 @@ class KilnWindow(gui.OvenWindow):
             elif state == "holding" and stage_samples:
                 errors = [abs(row["temperature_c"] - row["target_temperature_c"]) for row in stage_samples]
                 stage_detail = f"Average error: {sum(errors) / len(errors):.2f} °C"
+        show_fault = state == "fault" and bool(view.detail)
+        if show_fault:
+            stage_detail = f"Cause: {describe_fault(view.detail)}. Fix it, then press Reset."
+        if show_fault != self._stage_detail_shows_fault:
+            self._stage_detail_shows_fault = show_fault
+            self.stage_detail_label.setStyleSheet(
+                f"color: {'#ff8a80' if show_fault else '#9aa1ab'}; font-size: 9pt;"
+            )
         self.stage_detail_label.setText(stage_detail)
 
         minutes, seconds = divmod(view.elapsed_s, 60.0)
@@ -237,7 +238,7 @@ class KilnWindow(gui.OvenWindow):
         self.door_label.setText(f"Door: {door_text}")
         color = "#4caf70" if view.door == "closed" else "#f4b942"
         self.door_label.setStyleSheet(f"color: {color};")
-        for widget in (self.target_input, self.hold_input, self.restore_pid_button):
+        for widget in (self.target_input, self.hold_input):
             widget.setEnabled(not view.running)
         if view.error:
             self.statusBar().showMessage(view.error, 8000)
@@ -380,11 +381,6 @@ class KilnWindow(gui.OvenWindow):
         self.target_input.setValue(min(45.0, config.MAX_SETPOINT))
         self.hold_input.setValue(60.0)
 
-    def restore_defaults(self):
-        """Restore process and PID settings from the single settings button."""
-        self.restore_process_defaults()
-        self.restore_pid_defaults()
-
     def show_run_events(self):
         view, _ = self.service.snapshot()
         events = (self._historical_record or {}).get("events", ()) if self._historical_record else view.events
@@ -477,28 +473,23 @@ class KilnWindow(gui.OvenWindow):
 
     def closeEvent(self, event):
         self._timer.stop()
-        self.service.close()
+        try:
+            self.service.close()
+        except RuntimeError as exc:
+            # The heater has already been forced off; report it and close anyway.
+            sys.stderr.write(f"Shutdown: {exc}\n")
         super().closeEvent(event)
 
+def _qt_message_handler(_mode, _context, message):
+    # Qt platform plugins without size-hint support warn whenever the window's
+    # minimum size changes; the warning is harmless.
+    if "propagateSizeHints" in message:
+        return
+    sys.stderr.write(message + "\n")
+
 def main():
+    QtCore.qInstallMessageHandler(_qt_message_handler)
     app = QtWidgets.QApplication(sys.argv)
-
-    # TEMPORARY WINDOWS import preview: it starts no service or hardware.
-    if sys.platform == "win32":
-        window = KilnWindow(_ImportPreviewService())
-        window.setWindowTitle("Oven Controller (UI only - no hardware)")
-        for toolbar in window.findChildren(QtWidgets.QToolBar):
-            for action in toolbar.actions():
-                if (toolbar.widgetForAction(action) not in (window.file_button, window.manual_button)
-                        and action is not window.event_log_action):
-                    action.setEnabled(False)
-        for label, action in window.file_actions.items():
-            action.setEnabled(label == "Import run")
-        for action in window.manual_actions.values():
-            action.setEnabled(False)
-        window.show()
-        return app.exec()
-
     try:
         service = Application(config)
     except Exception as exc:
@@ -506,7 +497,11 @@ def main():
         return 1
     app.aboutToQuit.connect(service.close)
     window = KilnWindow(service)
-    window.show()
+    window.showFullScreen()
+    # SIGTERM (pkill over SSH) and SIGINT (Ctrl+C) close the window like Quit,
+    # so the worker's shutdown turns the heater off and stops the motor.
+    for signal_number in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signal_number, lambda *_: QtCore.QTimer.singleShot(0, window.close))
     return app.exec()
 
 if __name__ == "__main__":

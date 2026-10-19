@@ -42,6 +42,26 @@ class ViewState:
     current_temperature_c: float | None = None
     can_start: bool = False
     ready_reason: str = "Waiting for a valid temperature reading"
+    estop_active: bool = False
+
+# Physical buttons and their on-screen equivalents queue these same commands.
+OPERATOR_BUTTON_COMMANDS = ("start", "stop", "open", "close")
+
+FAULT_DESCRIPTIONS = {
+    "sensor_timeout": "Temperature sensor is not responding",
+    "sensor_invalid": "Temperature reading is invalid",
+    "over_temperature": "Temperature reached the safety limit",
+    "door_error": "Both door limit switches report pressed",
+    "door_motor_timeout": "Door did not reach its limit switch in time",
+    "door_motor_switch_error": "Door limit switches conflicted while the door moved",
+    "door_not_in_position": "Door stopped away from its expected position",
+}
+
+def describe_fault(reason: str) -> str:
+    """Return an operator-facing explanation of a controller fault reason."""
+    if reason.startswith("worker_error: "):
+        return "Control error: " + reason.removeprefix("worker_error: ")
+    return FAULT_DESCRIPTIONS.get(reason, reason.replace("_", " ").capitalize())
 
 class Application:
     """Owns hardware, control thread and immutable UI-facing snapshots."""
@@ -67,27 +87,25 @@ class Application:
         self._current_temperature_c = None
         self._sensor_age_s = float("inf")
         self._estop_active = False
-        self._estop_latched = threading.Event()
         self._manual_override_active = False
         self._closing = threading.Event()
         self._closed = False
-        self.hw.buttons["start"].when_pressed = lambda: self.command("start")
-        self.hw.buttons["stop"].when_pressed = lambda: self.command("stop")
-        self.hw.buttons["open"].when_pressed = lambda: self.command("open")
-        self.hw.buttons["close"].when_pressed = lambda: self.command("close")
-        callback = lambda: self._emergency_cut("emergency_stop")
+        for name in OPERATOR_BUTTON_COMMANDS:
+            self.hw.buttons[name].when_pressed = lambda name=name: self.command(name)
+        # The E-Stop circuit cuts power itself; the app only listens so it can end the run.
+        callback = lambda: self.command("emergency", "emergency_stop")
         if config.ESTOP_NORMALLY_CLOSED: self.hw.estop_device.when_deactivated = callback
         else: self.hw.estop_device.when_activated = callback
         self._thread = threading.Thread(target=self._run, name="kiln-control", daemon=False)
         self._thread.start()
     def command(self, name, values=None):
         self.commands.put((name, values))
-    def _emergency_cut(self, reason):
-        self._estop_latched.set()
+    def _enter_emergency_stop(self, now, reason):
+        if self.controller.state == State.E_STOP:
+            return
         self._manual_override_active = False
-        self.hw.heater.emergency_off()
-        self.hw.motor.stop()
-        self.command("emergency", reason)
+        self.controller.emergency_stop(reason)
+        self._append_event("emergency_stop", "Emergency stop activated", now, reason=str(reason))
     def snapshot(self):
         with self._lock:
             view = self._view
@@ -187,7 +205,8 @@ class Application:
             self._error = error or self._error
             view = ViewState(*fields, error=self._error, events=tuple(dict(event) for event in self._events),
                 current_temperature_c=self._current_temperature_c,
-                can_start=not reason and allowed_state, ready_reason=ready_text)
+                can_start=not reason and allowed_state, ready_reason=ready_text,
+                estop_active=self._estop_active)
             self._view = view
             samples = tuple(self.samples)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
@@ -221,12 +240,12 @@ class Application:
             try: name, value = self.commands.get_nowait()
             except Empty: return
             try:
-                if (self.controller.state in (State.E_STOP, State.FAULT)
+                if ((self.controller.state == State.E_STOP or self._estop_active)
+                        and name in ("start", "open", "close", "heater_on")):
+                    raise RuntimeError("Emergency stop is active; release it and press Reset before using the heater or door")
+                if (self.controller.state == State.FAULT
                         and name in ("start", "open", "close", "heater_on")):
                     raise RuntimeError("Safety fault is latched; reset it before using the heater or door")
-                if (self._estop_latched.is_set()
-                        and name in ("start", "open", "close", "heater_on")):
-                    raise RuntimeError("Emergency stop is engaged; release it and reset before using the heater or door")
                 if name == "start":
                     if self.controller.state == State.PAUSED:
                         fault = self.controller.safety.check(
@@ -278,13 +297,10 @@ class Application:
                         self._append_event("run_stopped", "Run paused by user; heater off", now,
                                            stopped_during=old_state.value)
                 elif name == "emergency":
-                    self._manual_override_active = False
-                    self.controller.emergency_stop(value)
-                    self._append_event("emergency_stop", "Emergency stop activated", now, reason=str(value))
+                    self._enter_emergency_stop(now, value)
                 elif name == "reset":
                     self._manual_override_active = False
                     self.controller.reset(now, temperature, age, self.hw.estop())
-                    self._estop_latched.clear()
                     self._run_started_monotonic = None
                     self._event_log_closed = True
                     self._pending_pid_event = None
@@ -354,7 +370,7 @@ class Application:
                 self._sensor_age_s = age
                 self._estop_active = self.hw.estop()
                 if self._estop_active:
-                    self._estop_latched.set()
+                    self._enter_emergency_stop(now, "emergency_stop")
                 self.hw.motor.update(now)
                 self._apply_commands(now, temperature, age)
                 if self.controller.active and self.controller.state != State.PAUSED and temperature is not None:
@@ -385,7 +401,7 @@ class Application:
                 self._closing.wait(max(0.0, next_tick-time.monotonic()))
                 if next_tick < time.monotonic()-period: next_tick = time.monotonic()
         except Exception as exc:
-            self.controller.emergency_stop(f"worker_error: {exc}")
+            self.controller.fault(f"worker_error: {exc}")
             self._publish(str(exc))
         finally:
             if self.controller.active and self.controller.state != State.PAUSED:

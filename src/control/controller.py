@@ -134,7 +134,9 @@ class Controller:
             self._set_state(State.HEATING, "Resuming warm up")
         self.resume_state = None
     def emergency_stop(self, reason="emergency_stop"):
-        self.hw.heater.emergency_off(); self.hw.motor.stop()
+        # The physical E-Stop removes power; only end the run and leave outputs idle.
+        if self.state == State.E_STOP: return
+        self.hw.heater.off(); self.hw.motor.stop()
         self.fault_reason = reason
         self._set_state(State.E_STOP, "Emergency stop")
     def reset(self, now, temperature, age_s, estop):
@@ -145,7 +147,7 @@ class Controller:
         self.hw.motor.clear_fault(); self.hw.heater.unlock(); self.hw.heater.off()
         self.fault_reason = ""; self.run_started = None; self.run_ended = None; self.hold_completed = False; self.completion_allowed = True
         self._set_state(State.READY, "Ready to run")
-    def _fault(self, reason):
+    def fault(self, reason):
         self.hw.heater.emergency_off(); self.hw.motor.stop()
         self.fault_reason = reason; self._set_state(State.FAULT, f"Fault: {reason.replace('_',' ')}")
     def step(self, now, temperature, age_s, estop, control_due=True):
@@ -154,7 +156,7 @@ class Controller:
             False, estop)
         if fault:
             if fault == "emergency_stop": self.emergency_stop()
-            elif self.state not in (State.FAULT, State.E_STOP): self._fault(fault)
+            elif self.state not in (State.FAULT, State.E_STOP): self.fault(fault)
             return
         if self.state in (State.HEATING, State.HOLDING) and door != DoorState.CLOSED:
             self.pause(now)
@@ -167,9 +169,9 @@ class Controller:
             self.peak_time = self.peak_tracker.peak_time_s
         self.last_step = now
         if self.state == State.DOOR_MOVING:
-            if self.hw.motor.state.value == "fault": self._fault(f"door_motor_{self.hw.motor.fault_reason}")
+            if self.hw.motor.state.value == "fault": self.fault(f"door_motor_{self.hw.motor.fault_reason}")
             elif self.hw.motor.state.value == "idle":
-                if self.hw.switches.state() != self.door_goal: self._fault("door_not_in_position")
+                if self.hw.switches.state() != self.door_goal: self.fault("door_not_in_position")
                 else:
                     self.heating_start_temperature = temperature
                     self._set_state(State.HEATING, "Warming up")
