@@ -9,6 +9,7 @@ import time
 from control.controller import Controller, State
 from hardware.factory import create_hardware
 from data_manager import DataManager
+from pid_tuning_monitor import append_recommendation
 
 @dataclass(frozen=True, slots=True)
 class ViewState:
@@ -211,11 +212,21 @@ class Application:
                 self._last_run_record = record
             try:
                 future = self._save_executor.submit(
-                    DataManager(self.config.DATA_DIRECTORY).export_run, record,
+                    self._save_run_and_analyze, record,
                 )
                 future.add_done_callback(self._save_run_done)
             except RuntimeError as exc:
                 self._save_run_error(exc)
+    def _save_run_and_analyze(self, record):
+        saved_path = DataManager(self.config.DATA_DIRECTORY).export_run(record)
+        try:
+            append_recommendation(record, self.config.DATA_DIRECTORY)
+        except Exception as exc:
+            # Run persistence remains successful even if this temporary observer fails.
+            with self._lock:
+                self._error = f"PID tuning log failed: {exc}"
+                self._view = replace(self._view, error=self._error)
+        return saved_path
     def _save_run_done(self, future):
         try:
             future.result()
