@@ -1,5 +1,6 @@
 # TODO
 
+- Implement physical E-Stop recovery through the Start button: after E-Stop release, the first press resets only, and a separate press starts a fresh run. Debounce/edge-detect the input so one press cannot trigger both actions.
 - Add a compact completed-run summary (peak temperature, time of peak, and difference from target) in the process status panel, in addition to the graph marker.
 - Add a graph marker showing elapsed time to reach the target temperature (warm-up time).
 - Add a graph marker showing elapsed time to reach the safe temperature (cool-down time).

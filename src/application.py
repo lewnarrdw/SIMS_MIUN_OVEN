@@ -156,12 +156,6 @@ class Application:
                 self._append_event("stage_started", "Cool down started", now)
         elif before == State.DOOR_MOVING and after == State.HEATING:
             self._append_event("stage_started", "Warm up started", now)
-        elif after == State.PAUSED:
-            self._append_event("run_paused", self.controller.status_text, now,
-                               stage=self.controller.stop_state)
-        elif before == State.PAUSED and after in (State.HEATING, State.HOLDING, State.COOLING):
-            self._append_event("run_resumed", self.controller.status_text, now,
-                               stage=after.value)
         if after == State.ABORTED:
             if before == State.COOLING:
                 self._append_event("cooldown_completed", "Cool down completed after stop", now)
@@ -210,9 +204,7 @@ class Application:
             self._view = view
             samples = tuple(self.samples)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
-        if (terminal or view.state == "paused") and view.run_started_at and (
-                terminal and view.run_started_at != self._last_saved_run_started_at
-                or view.state == "paused" and view.run_started_at != self._last_saved_run_started_at):
+        if terminal and view.run_started_at and view.run_started_at != self._last_saved_run_started_at:
             record = DataManager.build_run_record(view, samples)
             with self._lock:
                 self._last_saved_run_started_at = view.run_started_at
@@ -247,17 +239,6 @@ class Application:
                         and name in ("start", "open", "close", "heater_on")):
                     raise RuntimeError("Safety fault is latched; reset it before using the heater or door")
                 if name == "start":
-                    if self.controller.state == State.PAUSED:
-                        fault = self.controller.safety.check(
-                            temperature, age, self.hw.switches.state(),
-                            self.hw.motor.fault_reason, False, self._estop_active,
-                        )
-                        if fault:
-                            raise RuntimeError(f"Cannot resume while safety condition remains: {fault}")
-                        self.controller.resume(now, temperature)
-                        self._manual_override_active = False
-                        self._last_saved_run_started_at = None
-                        continue
                     if self.controller.active:
                         if self._manual_override_active:
                             self._manual_override_active = False
@@ -269,6 +250,7 @@ class Application:
                     self.controller.start(now, settings["target_temperature_c"], settings["hold_duration_s"],
                         (settings["kp"],settings["ki"],settings["kd"]), temperature)
                     self.hw.heater.unlock()
+                    self._last_saved_run_started_at = None
                     with self._lock:
                         self.samples.clear()
                         self._events.clear()
@@ -294,7 +276,7 @@ class Application:
                     old_state = self.controller.state
                     self.controller.stop(now)
                     if old_state != self.controller.state:
-                        self._append_event("run_stopped", "Run paused by user; heater off", now,
+                        self._append_event("run_stopped", "Run stopped by user; heater off", now,
                                            stopped_during=old_state.value)
                 elif name == "emergency":
                     self._enter_emergency_stop(now, value)
@@ -329,12 +311,12 @@ class Application:
                             "last_change": now,
                         }
                 elif name == "open":
-                    if self.controller.active and self.controller.state != State.PAUSED:
-                        self.controller.pause(now, "Door opened by operator")
+                    if self.controller.active:
+                        raise RuntimeError("Manual door controls are unavailable during a run")
                     self._manual_override_active = True
                     self.hw.motor.open(now)
                 elif name == "close":
-                    if self.controller.active and self.controller.state != State.PAUSED:
+                    if self.controller.active:
                         raise RuntimeError("Manual door controls are unavailable during a run")
                     self._manual_override_active = True
                     self.hw.motor.close_door(now)
@@ -350,7 +332,7 @@ class Application:
                     self.hw.heater.set_percent(100.0)
                 elif name == "heater_off":
                     if self.controller.active:
-                        self.controller.pause(now, "Stopped by operator")
+                        self.controller.stop(now)
                     self._manual_override_active = True
                     self.hw.heater.off()
             except (ValueError, RuntimeError, KeyError) as exc:
@@ -373,7 +355,7 @@ class Application:
                     self._enter_emergency_stop(now, "emergency_stop")
                 self.hw.motor.update(now)
                 self._apply_commands(now, temperature, age)
-                if self.controller.active and self.controller.state != State.PAUSED and temperature is not None:
+                if self.controller.active and temperature is not None:
                     elapsed = max(0.0, now - self.controller.run_started)
                     sample = {"elapsed_s": elapsed, "temperature_c": temperature,
                         "target_temperature_c": self.controller.target, "heater_output_percent": self.hw.heater.percent,
@@ -404,9 +386,8 @@ class Application:
             self.controller.fault(f"worker_error: {exc}")
             self._publish(str(exc))
         finally:
-            if self.controller.active and self.controller.state != State.PAUSED:
-                self.controller.pause(time.monotonic(), "Application closed; run paused")
-            if self.controller.state == State.PAUSED:
+            if self.controller.active:
+                self.controller.stop(time.monotonic(), "Application closed; run stopped")
                 self._publish()
             self.hw.heater.emergency_off()
             self.hw.motor.stop()

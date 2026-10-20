@@ -159,6 +159,43 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
         self.hardware.buttons["start"].press()
 
         self.assertTrue(wait_for(lambda: self.state() == "heating"))
+        self.assertTrue(wait_for(lambda: self.hardware.heater.percent > 0.0))
+
+    def test_digital_start_uses_the_same_heater_control_path(self) -> None:
+        self.assertTrue(wait_for(lambda: self.app.snapshot()[0].can_start))
+
+        self.app.command("start")
+
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
+        self.assertTrue(wait_for(lambda: self.hardware.heater.percent > 0.0))
+
+    def test_start_after_stop_creates_a_fresh_run(self) -> None:
+        self.assertTrue(wait_for(lambda: self.app.snapshot()[0].can_start))
+        self.app.command("start")
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
+        first_started_at = self.app.snapshot()[0].run_started_at
+
+        self.app.command("stop")
+        self.assertTrue(wait_for(lambda: self.state() == "aborted"))
+        self.assertEqual(self.hardware.heater.percent, 0.0)
+
+        self.app.command("start")
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
+        self.assertNotEqual(self.app.snapshot()[0].run_started_at, first_started_at)
+
+    def test_manual_door_open_is_rejected_during_a_run(self) -> None:
+        self.assertTrue(wait_for(lambda: self.app.snapshot()[0].can_start))
+        self.app.command("start")
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
+
+        self.app.command("open")
+
+        self.assertTrue(wait_for(
+            lambda: "Manual door controls are unavailable during a run"
+            in self.app.snapshot()[0].error
+        ))
+        self.assertEqual(self.state(), "heating")
+        self.assertEqual(self.hardware.motor.state.value, "idle")
 
     def test_engaged_estop_ends_run_without_locking_outputs(self) -> None:
         self.assertTrue(wait_for(lambda: self.app.snapshot()[0].can_start))

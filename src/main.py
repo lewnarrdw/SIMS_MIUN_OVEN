@@ -169,18 +169,17 @@ class KilnWindow(gui.OvenWindow):
             self.goal_curve.setData([], [])
             self.duty_curve.setData([], [])
         state = view.state
-        self.run_action.setText("Resume" if state == "paused" else "Run")
-        self.run_action.setToolTip("Resume the paused run" if state == "paused" else "Start a new run")
+        self.run_action.setText("Run")
+        self.run_action.setToolTip("Start a new run")
         progress_stage = {"ready": 0, "heating": 1, "holding": 2, "cooling": 3,
-                          "paused": max(1, min(3, getattr(view, "stop_stage", None) or 1)),
                           "complete": 4}.get(state, -1)
         if state == "aborted":
             progress_stage = max(1, min(3, getattr(view, "stop_stage", None) or 1))
-        if state in ("paused", "aborted") and getattr(view, "stop_state", None) == "door_moving":
+        if state == "aborted" and getattr(view, "stop_state", None) == "door_moving":
             progress_stage = -1
         self.progress.set_progress(progress_stage, view.fraction, view.detail)
         titles = {"ready": "Ready to run", "door_moving": "Closing door", "heating": "Heating",
-                  "holding": "Holding", "cooling": "Cooling down", "paused": "Paused",
+                  "holding": "Holding", "cooling": "Cooling down",
                   "complete": "Complete", "aborted": "Stopped", "fault": "Fault", "e_stop": "Emergency stop"}
         opening_door = (state == "cooling" and
                         getattr(view, "current_temperature_c", None) is not None and
@@ -394,8 +393,7 @@ class KilnWindow(gui.OvenWindow):
                 elapsed = event["elapsed_s"]
                 severity = event.get("severity")
                 if severity is None:
-                    severity = {"run_faulted": "error", "emergency_stop": "error",
-                                "run_paused": "warning"}.get(event.get("type"))
+                    severity = {"run_faulted": "error", "emergency_stop": "error"}.get(event.get("type"))
                 tag = f"[{severity.upper()}] " if severity else ""
                 line = f"{int(elapsed // 60):02d}:{elapsed % 60:05.2f}  {tag}{event['description']}"
                 changes = event.get("changes", {})
@@ -448,8 +446,7 @@ class KilnWindow(gui.OvenWindow):
         run_key = getattr(view, "run_started_at", None) or "current"
         for event in (() if self._historical_record is not None else getattr(view, "events", ())):
             event_type = event.get("type", "")
-            severity = {"run_faulted": "error", "emergency_stop": "error",
-                        "run_paused": "warning"}.get(event_type)
+            severity = {"run_faulted": "error", "emergency_stop": "error"}.get(event_type)
             if severity:
                 key = (run_key, event.get("elapsed_s"), event_type, event.get("description"))
                 add_attention(key, severity, event.get("description", "Attention event"),

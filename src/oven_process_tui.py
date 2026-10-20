@@ -175,7 +175,7 @@ def run_process(target: float, hold_s: float) -> int:
         last_report = 0.0
         period = config.SENSOR_PERIOD_S
         while controller.state not in (
-            State.COMPLETE, State.FAULT, State.E_STOP, State.ABORTED, State.PAUSED
+            State.COMPLETE, State.FAULT, State.E_STOP, State.ABORTED
         ):
             now = time.monotonic()
             hardware.sensor.update(now)
@@ -184,8 +184,8 @@ def run_process(target: float, hold_s: float) -> int:
             hardware.motor.update(now)
 
             if hardware.buttons["stop"].is_pressed:
-                controller.emergency_stop("operator_stop")
-                print("[STOP] Stop button pressed; heater disabled.", flush=True)
+                controller.stop(now)
+                print("[STOP] Stop button pressed; start a new run to continue.", flush=True)
 
             before = controller.state
             control_due = now >= next_control
@@ -213,8 +213,8 @@ def run_process(target: float, hold_s: float) -> int:
             if controller.state == State.COMPLETE:
                 print("[COMPLETE] Below 26 C; door opened and heater is off.", flush=True)
                 return 0
-            if controller.state == State.PAUSED:
-                print("[PAUSED] Door safety interrupted the run; heater disabled.", flush=True)
+            if controller.state == State.ABORTED:
+                print("[STOPPED] Run interrupted; start a new run to continue.", flush=True)
                 return 1
             if before != controller.state:
                 print(f"[STAGE] {controller.status_text}", flush=True)
