@@ -232,8 +232,26 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
         self.assertEqual(self.state(), "e_stop")
 
         self.hardware.estop_engaged = False
-        self.app.command("reset")
         self.assertTrue(wait_for(lambda: self.state() == "ready"))
+
+
+    def test_releasing_estop_recovers_without_discarding_run_data(self) -> None:
+        self.assertTrue(wait_for(lambda: self.app.snapshot()[0].can_start))
+        self.app.command("start")
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
+        self.hardware.estop_engaged = True
+        self.assertTrue(wait_for(lambda: self.state() == "e_stop"))
+        self.assertTrue(wait_for(lambda: len(self.app.snapshot()[1]) > 0))
+        samples_before_release = self.app.snapshot()[1]
+
+        self.hardware.estop_engaged = False
+
+        self.assertTrue(wait_for(lambda: self.state() == "ready"))
+        view, samples_after_release = self.app.snapshot()
+        self.assertEqual(samples_after_release, samples_before_release)
+        self.assertIsNotNone(self.app.last_run_record)
+        self.assertEqual(self.app.last_run_record["result"]["state"], "e_stop")
+        self.assertTrue(view.can_start)
 
 
 class FakeService:
@@ -289,15 +307,13 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.assertFalse(any(self.toolbar_actions_enabled()))
         self.assertFalse(self.window.controls_box.isEnabled())
 
-    def test_released_estop_offers_only_reset(self) -> None:
+    def test_releasing_estop_restores_controls_without_reset_prompt(self) -> None:
         self.set_view(state="e_stop", estop_active=True)
-        self.set_view(state="e_stop", estop_active=False)
+        self.set_view(state="ready", estop_active=False)
 
-        self.assertIn("Press Reset", self.window.estop_banner.text())
-        self.assertTrue(self.window.reset_action.isEnabled())
-        enabled = [action for action in self.window.process_toolbar.actions() if action.isEnabled()]
-        self.assertEqual(enabled, [self.window.reset_action])
-        self.assertFalse(self.window.controls_box.isEnabled())
+        self.assertTrue(self.window.estop_banner.isHidden())
+        self.assertTrue(all(self.toolbar_actions_enabled()))
+        self.assertTrue(self.window.controls_box.isEnabled())
 
     def test_cleared_estop_restores_controls(self) -> None:
         before = self.toolbar_actions_enabled()

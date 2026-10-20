@@ -108,7 +108,7 @@ class KilnWindow(gui.OvenWindow):
 
     def refresh(self):
         live_view, live_samples = self.service.snapshot()
-        self.set_emergency_stop(getattr(live_view, "estop_active", False), live_view.state == "e_stop")
+        self.set_emergency_stop(getattr(live_view, "estop_active", False))
         run_started_at = getattr(live_view, "run_started_at", None)
         if run_started_at is not None and run_started_at != self._live_run_started_at:
             self._live_run_started_at = run_started_at

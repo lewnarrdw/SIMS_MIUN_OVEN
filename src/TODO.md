@@ -2,7 +2,6 @@
 
 - Remove the temporary `pid_tuning_monitor.py` module and its application hook after collecting enough real-oven tuning data; review `data/pid_tuning_log.txt` first.
 
-- Implement physical E-Stop recovery through the Start button: after E-Stop release, the first press resets only, and a separate press starts a fresh run. Debounce/edge-detect the input so one press cannot trigger both actions.
 - Add a compact completed-run summary (peak temperature, time of peak, and difference from target) in the process status panel, in addition to the graph marker.
 - Add a graph marker showing elapsed time to reach the target temperature (warm-up time).
 - Add a graph marker showing elapsed time to reach the safe temperature (cool-down time).

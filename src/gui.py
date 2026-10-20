@@ -414,7 +414,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         _load_ui_fonts()
         QtWidgets.QApplication.instance().setFont(QtGui.QFont("IBM Plex Sans", 10))
         self.setWindowTitle("Oven Controller")
-        self._emergency_stop_shown: tuple[bool, bool] | None = None
+        self._emergency_stop_shown: bool | None = None
         self._pre_emergency_enabled: dict[QtGui.QAction, bool] = {}
         self._build_toolbar()
         self._build_layout()
@@ -1403,31 +1403,25 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.x_axis_min_label.raise_()
         self.x_axis_max_label.raise_()
 
-    def set_emergency_stop(self, engaged: bool, latched: bool) -> None:
+    def set_emergency_stop(self, engaged: bool) -> None:
         """Turn the window red and lock operator controls while an E-Stop is in effect.
 
-        ``engaged`` means the physical E-Stop is pressed; ``latched`` means the
-        stop remains in effect until Reset, which is the only control offered
-        once the E-Stop has been released.
+        The physical E-Stop is the latch; releasing it clears the GUI lock.
         """
-        active = engaged or latched
+        active = engaged
         previous = self._emergency_stop_shown
-        if (engaged, latched) == previous or (not active and previous is None):
+        if engaged == previous or (not active and previous is None):
             return
         actions = self.process_toolbar.actions()
         if active and previous is None:
             self._pre_emergency_enabled = {action: action.isEnabled() for action in actions}
         if active:
             for action in actions:
-                action.setEnabled(action is self.reset_action and not engaged)
+                action.setEnabled(False)
             self.controls_box.setEnabled(False)
-            self.estop_banner.setText(
-                "EMERGENCY STOP: the oven has been stopped. Release the E-Stop button to continue."
-                if engaged else
-                "E-Stop released. Press Reset to clear the emergency stop."
-            )
+            self.estop_banner.setText("EMERGENCY STOP: the oven has been stopped. Release the E-Stop button to continue.")
             self.estop_banner.show()
-            self._emergency_stop_shown = (engaged, latched)
+            self._emergency_stop_shown = engaged
         else:
             for action, enabled in self._pre_emergency_enabled.items():
                 action.setEnabled(enabled)

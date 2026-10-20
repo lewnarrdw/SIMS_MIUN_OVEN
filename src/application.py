@@ -364,6 +364,17 @@ class Application:
                 self._estop_active = self.hw.estop()
                 if self._estop_active:
                     self._enter_emergency_stop(now, "emergency_stop")
+                elif self.controller.state == State.E_STOP:
+                    # The physical switch is the E-Stop latch. Recover on release
+                    # without clearing the just-finished run's samples or events.
+                    try:
+                        self.controller.reset(now, temperature, age, False)
+                    except RuntimeError:
+                        # Other active safety faults still require operator reset.
+                        pass
+                    else:
+                        self._run_started_monotonic = None
+                        self._event_log_closed = True
                 self.hw.motor.update(now)
                 self._apply_commands(now, temperature, age)
                 if self.controller.active and temperature is not None:
