@@ -233,7 +233,6 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
         self.hardware.estop_engaged = False
         self.assertTrue(wait_for(lambda: self.state() == "ready"))
 
-
     def test_releasing_estop_recovers_without_discarding_run_data(self) -> None:
         self.assertTrue(wait_for(lambda: self.app.snapshot()[0].can_start))
         self.app.command("start")
@@ -318,7 +317,11 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.assertIn("EMERGENCY STOP", self.window.estop_banner.text())
         self.assertTrue(self.window.centralWidget().property("emergencyStop"))
         self.assertFalse(any(self.toolbar_actions_enabled()))
-        self.assertFalse(self.window.controls_box.isEnabled())
+        self.assertTrue(self.window.controls_box.isEnabled())
+        self.assertTrue(self.window.pid_toggle.isEnabled())
+        self.assertFalse(self.window.hold_input.isEnabled())
+        self.window.pid_toggle.setChecked(True)
+        self.assertFalse(self.window.pid_controls.isHidden())
 
     def test_releasing_estop_restores_controls_without_reset_prompt(self) -> None:
         self.set_view(state="e_stop", estop_active=True)

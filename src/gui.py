@@ -171,157 +171,294 @@ class ThemedDoubleSpinBox(QtWidgets.QDoubleSpinBox):
             painter.drawRoundedRect(shell_rect, 6, 6)
 
 
-class DurationSecondsInput(QtWidgets.QSpinBox):
-    """Integer seconds editor that always displays two digits."""
+class DurationLineEdit(QtWidgets.QLineEdit):
+    """Route duration editing keys directly to the owning spin box."""
 
-    def textFromValue(self, value: int) -> str:
-        return f"{value:02d}"
+    def __init__(self, duration_spin_box: DurationSpinBox) -> None:
+        super().__init__(duration_spin_box)
+        self.duration_spin_box = duration_spin_box
+
+    def event(self, event: QtCore.QEvent) -> bool:
+        # QWidget normally treats Tab as focus traversal before a line edit can
+        # use it for segment navigation. Claim it during shortcut resolution
+        # so the KeyPress reaches the duration editor's normal key handling.
+        if event.type() == QtCore.QEvent.Type.ShortcutOverride:
+            key = event.key()
+            if key in (QtCore.Qt.Key.Key_Tab, QtCore.Qt.Key.Key_Backtab):
+                event.accept()
+                return True
+        return super().event(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if self.duration_spin_box._handle_editor_key(event):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        super().mouseReleaseEvent(event)
+        self.duration_spin_box._select_segment_at(event.position().toPoint())
+
+    def focusNextPrevChild(self, next_child: bool) -> bool:
+        if self.duration_spin_box._focus_next_prev_segment(next_child):
+            return True
+        return super().focusNextPrevChild(next_child)
 
 
 class DurationSpinBox(ThemedDoubleSpinBox):
-    """Native spin-box shell with separately editable minute and second parts."""
+    """Single-field m:ss editor with independently selectable time segments."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._updating_parts = False
+        self._active_segment = "minutes"
+        self._typed_segment: str | None = None
+        self._typed_digits = ""
+        self._typed_timer = QtCore.QTimer(self)
+        self._typed_timer.setSingleShot(True)
+        self._typed_timer.setInterval(1000)
+        self._typed_timer.timeout.connect(self._clear_typed_digits)
         self.setRange(0, 120)
         self.setDecimals(0)
         self.setSingleStep(1)
+        self.setAccelerated(True)
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
-        line_edit = self.lineEdit()
-        line_edit.clear()
-        line_edit.setReadOnly(True)
-        line_edit.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        line_edit = DurationLineEdit(self)
+        self.setLineEdit(line_edit)
+        self._duration_line_edit = line_edit
+        line_edit.setReadOnly(False)
+        line_edit.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        line_edit.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.NoContextMenu)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         line_edit.setStyleSheet(
-            "QLineEdit { min-height: 0; padding: 0 10px; border: none;"
-            " border-radius: 0; background: transparent; color: transparent;"
-            " selection-color: transparent; selection-background-color: transparent; }"
+            "QLineEdit { min-height: 0; padding: 0; border: none;"
+            " border-radius: 0; background: transparent; color: #e4e7eb;"
+            " selection-color: #15171b; selection-background-color: #e8b33d; }"
         )
-
-        self._editor = QtWidgets.QWidget(self)
-
-        self.minutes_input = QtWidgets.QSpinBox(self._editor)
-        self.minutes_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.minutes_input.setKeyboardTracking(False)
-        self.minutes_input.setRange(0, 2)
-        self.minutes_input.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self.minutes_input.setStyleSheet(self._duration_part_style())
-        self.minutes_input.lineEdit().setTextMargins(0, 0, 0, 0)
-        self.minutes_input.setFixedSize(26, 38)
-        self.minutes_input.editingFinished.connect(self._commit_parts)
-
-        separator = QtWidgets.QLabel(":", self._editor)
-        separator.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        separator.setStyleSheet(
-            "border: none; background: transparent; color: #9aa1ab;"
-            " font-family: 'IBM Plex Mono';"
-        )
-        separator.setFixedSize(8, 38)
-
-        self.seconds_input = DurationSecondsInput(self._editor)
-        self.seconds_input.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.seconds_input.setKeyboardTracking(False)
-        self.seconds_input.setRange(0, 59)
-        self.seconds_input.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self.seconds_input.setStyleSheet(self._duration_part_style())
-        self.seconds_input.lineEdit().setTextMargins(0, 0, 0, 0)
-        self.seconds_input.setFixedSize(36, 38)
-        self.seconds_input.editingFinished.connect(self._commit_parts)
-
-        self._separator = separator
-        self._editor.raise_()
-
-        self.minutes_input.valueChanged.connect(self._parts_changed)
-        self.seconds_input.valueChanged.connect(self._parts_changed)
-        self.valueChanged.connect(self._sync_parts)
-
-    @staticmethod
-    def _duration_part_style() -> str:
-        return (
-            "QSpinBox { min-height: 0; padding: 0; border: none; border-radius: 0;"
-            " background: transparent; color: #e4e7eb; font-family: 'IBM Plex Mono';"
-            " font-weight: 500; }"
-            "QSpinBox QLineEdit { min-height: 0; padding: 0; border: none;"
-            " border-radius: 0; background: transparent; color: #e4e7eb; }"
-        )
+        line_edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        line_edit.installEventFilter(self)
 
     def textFromValue(self, value: float) -> str:
-        return ""
+        total_seconds = int(round(value))
+        minutes, seconds = divmod(total_seconds, 60)
+        return f"{minutes}:{seconds:02d}"
 
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        if hasattr(self, "_editor"):
-            self._position_duration_editor()
+    def valueFromText(self, text: str) -> float:
+        minutes_text, separator, seconds_text = text.partition(":")
+        minutes_text, seconds_text = minutes_text.strip(), seconds_text.strip()
+        if (
+            not separator
+            or len(minutes_text) != 1
+            or not minutes_text.isdigit()
+            or not 1 <= len(seconds_text) <= 2
+            or not seconds_text.isdigit()
+        ):
+            return self.value()
+        minutes = int(minutes_text)
+        seconds = int(seconds_text)
+        return min(self.maximum(), max(self.minimum(), minutes * 60 + seconds))
 
-    def showEvent(self, event: QtGui.QShowEvent) -> None:
-        super().showEvent(event)
-        if hasattr(self, "_editor"):
-            self._position_duration_editor()
+    def validate(
+        self, text: str, position: int
+    ) -> tuple[QtGui.QValidator.State, str, int]:
+        minutes_text, separator, seconds_text = text.partition(":")
+        if not separator:
+            state = (
+                QtGui.QValidator.State.Intermediate
+                if not text or text.strip().isdigit()
+                else QtGui.QValidator.State.Invalid
+            )
+            return state, text, position
+        minutes_text, seconds_text = minutes_text.strip(), seconds_text.strip()
+        if len(minutes_text) == 1 and minutes_text.isdigit() and 1 <= len(seconds_text) <= 2 and seconds_text.isdigit():
+            minutes, seconds = int(minutes_text), int(seconds_text)
+            state = (
+                QtGui.QValidator.State.Acceptable
+                if minutes <= 2 and seconds <= 59
+                else QtGui.QValidator.State.Invalid
+            )
+            return state, text, position
+        if (
+            len(minutes_text) == 1
+            and minutes_text.isdigit()
+            and (not seconds_text or (len(seconds_text) <= 2 and seconds_text.isdigit()))
+        ):
+            return QtGui.QValidator.State.Intermediate, text, position
+        return QtGui.QValidator.State.Invalid, text, position
 
-    def _position_duration_editor(self) -> None:
-        line_edit = self.lineEdit()
-        self._editor.setGeometry(line_edit.geometry())
-        option = QtWidgets.QStyleOptionFrame()
-        option.initFrom(line_edit)
-        option.rect = line_edit.rect()
-        content_rect = line_edit.style().subElementRect(
-            QtWidgets.QStyle.SubElement.SE_LineEditContents,
-            option,
-            line_edit,
-        )
-        content_left = max(0, content_rect.left())
-        content_right = min(self._editor.width(), content_rect.right() + 1)
-        duration_width = (
-            self.minutes_input.width()
-            + self._separator.width()
-            + self.seconds_input.width()
-        )
-        duration_left = max(content_left, content_right - duration_width)
-        minutes_x = duration_left
-        separator_x = minutes_x + self.minutes_input.width()
-        seconds_x = separator_x + self._separator.width()
-        self.minutes_input.move(minutes_x, 0)
-        self._separator.move(separator_x, 0)
-        self.seconds_input.move(seconds_x, 0)
-        self._editor.raise_()
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if watched != self._duration_line_edit:
+            return super().eventFilter(watched, event)
 
-    def setRange(self, minimum: float, maximum: float) -> None:
-        super().setRange(minimum, maximum)
-        if hasattr(self, "minutes_input"):
-            self.minutes_input.setRange(0, int(maximum) // 60)
-            self._sync_parts(self.value())
+        if event.type() == QtCore.QEvent.Type.FocusIn:
+            self._clear_typed_digits()
+            self._set_active_segment("minutes", select=True)
+        elif event.type() == QtCore.QEvent.Type.KeyPress:
+            return self._handle_editor_key(event)
+        elif event.type() == QtCore.QEvent.Type.FocusOut:
+            self._clear_typed_digits()
+        elif event.type() == QtCore.QEvent.Type.Wheel:
+            if not self._duration_line_edit.hasFocus():
+                return True
+        return super().eventFilter(watched, event)
 
-    def _sync_parts(self, total_seconds: float) -> None:
-        if not hasattr(self, "minutes_input"):
+    def _handle_editor_key(self, key_event: QtGui.QKeyEvent) -> bool:
+        key = key_event.key()
+        if (
+            key == QtCore.Qt.Key.Key_V
+            and key_event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier
+        ):
+            duration_seconds = self._parse_pasted_duration(
+                QtWidgets.QApplication.clipboard().text()
+            )
+            if duration_seconds is not None:
+                self.setValue(duration_seconds)
+            self._clear_typed_digits()
+            return True
+        if key in (QtCore.Qt.Key.Key_Tab, QtCore.Qt.Key.Key_Backtab):
+            forward = key == QtCore.Qt.Key.Key_Tab and not (
+                key_event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier
+            )
+            segment = self._selected_segment()
+            if forward and segment == "minutes":
+                self._set_active_segment("seconds", select=True)
+                return True
+            if not forward and segment == "seconds":
+                self._set_active_segment("minutes", select=True)
+                return True
+            return False
+        if key in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_Right):
+            segment = "minutes" if key == QtCore.Qt.Key.Key_Left else "seconds"
+            if segment != self._active_segment:
+                self._set_active_segment(segment, select=True)
+                return True
+        if key in (QtCore.Qt.Key.Key_Backspace, QtCore.Qt.Key.Key_Delete):
+            self._replace_segment(self._selected_segment(), 0)
+            return True
+        if key_event.text().isdigit() and len(key_event.text()) == 1:
+            self._type_digit(key_event.text(), self._selected_segment())
+            return True
+        if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            self._clear_typed_digits()
+            if self._selected_segment() == "minutes":
+                self._set_active_segment("seconds", select=True)
+            return True
+        return bool(key_event.text() and key_event.text().isprintable())
+
+    def _select_segment_at(self, position: QtCore.QPoint) -> None:
+        cursor_position = self._duration_line_edit.cursorPositionAt(position)
+        colon_position = self._duration_line_edit.text().index(":")
+        segment = "minutes" if cursor_position <= colon_position else "seconds"
+        self._clear_typed_digits()
+        self._set_active_segment(segment, select=True)
+
+    def _focus_next_prev_segment(self, next_child: bool) -> bool:
+        segment = self._selected_segment()
+        if next_child and segment == "minutes":
+            self._set_active_segment("seconds", select=True)
+            return True
+        if not next_child and segment == "seconds":
+            self._set_active_segment("minutes", select=True)
+            return True
+        return False
+
+    @staticmethod
+    def _parse_pasted_duration(text: str) -> int | None:
+        minutes_text, separator, seconds_text = text.strip().partition(":")
+        if (
+            not separator
+            or not 1 <= len(minutes_text) <= 2
+            or not minutes_text.isdigit()
+            or len(seconds_text) != 2
+            or not seconds_text.isdigit()
+        ):
+            return None
+        minutes, seconds = int(minutes_text), int(seconds_text)
+        if minutes > 2 or seconds > 59:
+            return None
+        return minutes * 60 + seconds
+
+    def stepBy(self, steps: int) -> None:
+        seconds_per_step = 60 if self._selected_segment() == "minutes" else 1
+        self.setValue(int(round(self.value())) + steps * seconds_per_step)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        if not self.hasFocus() and not self._duration_line_edit.hasFocus():
+            event.ignore()
             return
-        self._updating_parts = True
-        try:
-            total = int(round(total_seconds))
-            active_input = QtWidgets.QApplication.focusWidget()
-            for part_input, part_value in (
-                (self.minutes_input, total // 60),
-                (self.seconds_input, total % 60),
-            ):
-                if part_input is active_input and part_input.lineEdit().isModified():
-                    continue
-                part_input.setValue(part_value)
-        finally:
-            self._updating_parts = False
+        super().wheelEvent(event)
 
-    def _commit_parts(self) -> None:
-        self._sync_parts(self.value())
+    def focusNextPrevChild(self, next_child: bool) -> bool:
+        if self._focus_next_prev_segment(next_child):
+            return True
+        return super().focusNextPrevChild(next_child)
 
-    def _parts_changed(self, _part_value: int) -> None:
-        if self._updating_parts:
-            return
-        total = self.minutes_input.value() * 60 + self.seconds_input.value()
-        self.setValue(max(self.minimum(), min(self.maximum(), total)))
+    def _clear_typed_digits(self) -> None:
+        self._typed_timer.stop()
+        self._typed_segment = None
+        self._typed_digits = ""
+
+    def _set_active_segment(self, segment: str, *, select: bool = False) -> None:
+        if segment != self._active_segment:
+            self._clear_typed_digits()
+        self._active_segment = segment
+        if select:
+            text = self.lineEdit().text()
+            colon_position = text.index(":")
+            if segment == "minutes":
+                self.lineEdit().setSelection(0, colon_position)
+            else:
+                self.lineEdit().setSelection(colon_position + 1, len(text) - colon_position - 1)
+
+    def _selected_segment(self) -> str:
+        editor = self._duration_line_edit
+        colon_position = editor.text().index(":")
+        selection_start = editor.selectionStart()
+        if selection_start >= 0:
+            return "minutes" if selection_start < colon_position else "seconds"
+        return "minutes" if editor.cursorPosition() <= colon_position else "seconds"
+
+    def _type_digit(self, digit: str, segment: str | None = None) -> None:
+        total_seconds = int(round(self.value()))
+        minutes, seconds = divmod(total_seconds, 60)
+        segment = segment or self._selected_segment()
+        self._active_segment = segment
+        if segment == "minutes":
+            minutes = min(2, int(digit))
+            self._clear_typed_digits()
+        else:
+            if self._typed_segment != "seconds" or len(self._typed_digits) >= 2:
+                self._typed_segment = "seconds"
+                self._typed_digits = ""
+            self._typed_digits += digit
+            seconds = min(59, int(self._typed_digits))
+            if len(self._typed_digits) >= 2:
+                self._clear_typed_digits()
+            else:
+                self._typed_timer.start()
+        self.setValue(minutes * 60 + seconds)
+        self._select_active_segment()
+
+    def _replace_segment(self, segment: str, value: int) -> None:
+        total_seconds = int(round(self.value()))
+        minutes, seconds = divmod(total_seconds, 60)
+        self._active_segment = segment
+        if segment == "minutes":
+            minutes = value
+        else:
+            seconds = value
+        self.setValue(minutes * 60 + seconds)
+        self._clear_typed_digits()
+        self._select_active_segment()
+
+    def _select_active_segment(self) -> None:
+        text = self.lineEdit().text()
+        colon_position = text.index(":")
+        if self._active_segment == "minutes":
+            self.lineEdit().setSelection(0, colon_position)
+        else:
+            self.lineEdit().setSelection(colon_position + 1, len(text) - colon_position - 1)
 
 
 class TargetLegendMarker(QtWidgets.QWidget):
@@ -418,6 +555,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         self._pre_emergency_enabled: dict[QtGui.QAction, bool] = {}
         self._build_toolbar()
         self._build_layout()
+        QtWidgets.QApplication.instance().installEventFilter(self)
         for control in (self.target_input, self.kp_input, self.ki_input, self.kd_input):
             control.lineEdit().installEventFilter(self)
         self._apply_visual_theme()
@@ -432,6 +570,27 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.resize(1280, expanded_window_height)
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if (
+            event.type() == QtCore.QEvent.Type.MouseButtonPress
+            and isinstance(watched, QtWidgets.QWidget)
+            and (watched is self or self.isAncestorOf(watched))
+        ):
+            application = QtWidgets.QApplication.instance()
+            focused_widget = application.focusWidget() if application else None
+            if (
+                focused_widget is not None
+                and focused_widget is not watched
+                and (focused_widget is self or self.isAncestorOf(focused_widget))
+            ):
+                field_widget = focused_widget
+                ancestor = focused_widget.parentWidget()
+                while ancestor is not None and ancestor is not self:
+                    if isinstance(ancestor, QtWidgets.QAbstractSpinBox):
+                        field_widget = ancestor
+                        break
+                    ancestor = ancestor.parentWidget()
+                if watched is not field_widget and not field_widget.isAncestorOf(watched):
+                    focused_widget.clearFocus()
         if (
             event.type() == QtCore.QEvent.Type.FocusOut
             and isinstance(watched, QtWidgets.QLineEdit)
@@ -1418,14 +1577,26 @@ class OvenWindow(QtWidgets.QMainWindow):
         if active:
             for action in actions:
                 action.setEnabled(False)
-            self.controls_box.setEnabled(False)
+            for control in (
+                self.target_input, self.hold_input,
+                self.kp_enable, self.ki_enable, self.kd_enable,
+                self.kp_input, self.ki_input, self.kd_input,
+                self.restore_pid_button,
+            ):
+                control.setEnabled(False)
             self.estop_banner.setText("EMERGENCY STOP: the oven has been stopped. Release the E-Stop button to continue.")
             self.estop_banner.show()
             self._emergency_stop_shown = engaged
         else:
             for action, enabled in self._pre_emergency_enabled.items():
                 action.setEnabled(enabled)
-            self.controls_box.setEnabled(True)
+            for control in (
+                self.target_input, self.hold_input,
+                self.kp_enable, self.ki_enable, self.kd_enable,
+                self.kp_input, self.ki_input, self.kd_input,
+                self.restore_pid_button,
+            ):
+                control.setEnabled(True)
             self.estop_banner.hide()
             self._emergency_stop_shown = None
         for widget in (self.centralWidget(), self.process_toolbar):

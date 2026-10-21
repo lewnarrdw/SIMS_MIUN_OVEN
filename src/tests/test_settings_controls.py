@@ -90,39 +90,101 @@ class SettingsControlTests(unittest.TestCase):
             )
             self.assertFalse(value_input.lineEdit().hasSelectedText())
 
-    def test_hold_parts_accept_complete_keyboard_entries(self) -> None:
+    def test_clicking_outside_hold_field_clears_editor_focus(self) -> None:
+        self.window.show()
+        self.app.processEvents()
+        editor = self.window.hold_input.lineEdit()
+        editor.setFocus()
+        self.app.processEvents()
+        self.assertTrue(editor.hasFocus())
+
+        QtTest.QTest.mouseClick(
+            self.window.stage_label,
+            QtCore.Qt.MouseButton.LeftButton,
+        )
+        self.app.processEvents()
+
+        self.assertFalse(editor.hasFocus())
+
+    def test_hold_single_field_tabs_between_segments_and_accepts_digits(self) -> None:
         hold_input = self.window.hold_input
         self.window.show()
         self.app.processEvents()
         hold_input.setValue(62)
 
-        seconds_editor = hold_input.seconds_input.lineEdit()
-        seconds_editor.setFocus()
-        seconds_editor.selectAll()
-        QtTest.QTest.keyClicks(seconds_editor, "45")
-        seconds_editor.clearFocus()
+        editor = hold_input.lineEdit()
+        QtTest.QTest.mouseClick(editor, QtCore.Qt.MouseButton.LeftButton)
+        self.app.processEvents()
+        self.assertTrue(editor.hasFocus())
+        self.assertFalse(editor.isReadOnly())
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Tab)
+        self.assertEqual(editor.selectionStart(), editor.text().index(":") + 1)
+        QtTest.QTest.keyClicks(editor, "45")
         self.app.processEvents()
         self.assertEqual(hold_input.value(), 105)
-        self.assertEqual(hold_input.seconds_input.value(), 45)
-        self.assertEqual(hold_input.seconds_input.lineEdit().text(), "45")
+        self.assertEqual(editor.text(), "1:45")
 
-        hold_input.setValue(45)
-        minutes_editor = hold_input.minutes_input.lineEdit()
-        minutes_editor.setFocus()
-        minutes_editor.selectAll()
-        QtTest.QTest.keyClicks(minutes_editor, "1")
-        minutes_editor.clearFocus()
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backtab)
+        self.assertEqual(editor.selectionStart(), 0)
+        QtTest.QTest.keyClicks(editor, "2")
         self.app.processEvents()
-        self.assertEqual(hold_input.value(), 105)
-        self.assertEqual(hold_input.minutes_input.value(), 1)
+        self.assertEqual(hold_input.value(), 120)
+        self.assertEqual(editor.text(), "2:00")
+        QtTest.QTest.keyClicks(editor, "1")
+        self.assertEqual(hold_input.value(), 60)
+        self.assertEqual(editor.text(), "1:00")
 
-    def test_hold_parts_stay_compact_and_seconds_keep_leading_zero(self) -> None:
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Tab)
+        QtTest.QTest.keyClicks(editor, "05")
+        self.assertEqual(hold_input.value(), 65)
+        self.assertEqual(editor.text(), "1:05")
+
+        hold_input.setValue(34)
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backtab)
+        QtTest.QTest.keyClicks(editor, "1")
+        self.assertEqual(hold_input.value(), 94)
+        self.assertEqual(editor.text(), "1:34")
+
+        hold_input.setValue(71)
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Tab)
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backtab)
+        QtTest.QTest.keyClicks(editor, "2")
+        self.assertEqual(hold_input.value(), 120)
+        self.assertEqual(editor.text(), "2:00")
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backspace)
+        self.assertEqual(hold_input.value(), 1)
+        self.assertEqual(editor.text(), "0:01")
+
+        hold_input.setValue(60)
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_Backspace)
+        self.assertEqual(hold_input.value(), 1)
+        self.assertEqual(editor.text(), "0:01")
+
+        QtWidgets.QApplication.clipboard().setText("1:23")
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_V, QtCore.Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(hold_input.value(), 83)
+        QtWidgets.QApplication.clipboard().setText("2:00001")
+        QtTest.QTest.keyClick(editor, QtCore.Qt.Key.Key_V, QtCore.Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(hold_input.value(), 83)
+
+    def test_hold_single_field_formats_seconds_and_steps_across_minute_boundaries(self) -> None:
         hold_input = self.window.hold_input
-        self.assertEqual(hold_input.minutes_input.width(), 22)
-        self.assertEqual(hold_input.seconds_input.width(), 22)
-        self.assertEqual(hold_input._separator.width(), 4)
         hold_input.setValue(5)
-        self.assertEqual(hold_input.seconds_input.lineEdit().text(), "05")
+        self.assertEqual(hold_input.lineEdit().text(), "0:05")
+        hold_input.setValue(59)
+        hold_input._set_active_segment("seconds", select=True)
+        hold_input.stepBy(1)
+        self.assertEqual(hold_input.value(), 60)
+        self.assertEqual(hold_input.lineEdit().text(), "1:00")
+        hold_input.setValue(120)
+        hold_input.stepBy(-1)
+        self.assertEqual(hold_input.value(), 119)
+        self.assertEqual(hold_input.lineEdit().text(), "1:59")
+        hold_input._set_active_segment("minutes", select=True)
+        hold_input.stepBy(1)
+        self.assertEqual(hold_input.value(), 120)
+        hold_input.stepBy(-1)
+        self.assertEqual(hold_input.value(), 60)
 
 
 if __name__ == "__main__":
