@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -55,6 +56,20 @@ class EventLogDialogThemeTests(unittest.TestCase):
 
         self.assertLess(dialog_background.lightness(), 60)
         self.assertLess(text_background.lightness(), 60)
+
+    def test_event_severity_tags_use_event_severity_and_older_types(self) -> None:
+        self.window.service.view = replace(self.window.service.view, events=(
+            {"elapsed_s": 1.0, "type": "run_aborted", "severity": "warning",
+             "description": "Run aborted: stopped by operator"},
+            {"elapsed_s": 2.0, "type": "run_faulted", "description": "Fault: over temperature"},
+            {"elapsed_s": 3.0, "type": "estop_released", "description": "E-Stop released"},
+        ))
+
+        text = self.open_event_dialog().findChild(QtWidgets.QPlainTextEdit).toPlainText()
+
+        self.assertIn("00:01.00  [WARNING] Run aborted: stopped by operator", text)
+        self.assertIn("00:02.00  [ERROR] Fault: over temperature", text)
+        self.assertIn("00:03.00  E-Stop released", text)
 
     def test_event_text_is_light_on_its_dark_background(self) -> None:
         dialog = self.open_event_dialog()

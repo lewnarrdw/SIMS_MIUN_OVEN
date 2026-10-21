@@ -40,6 +40,11 @@ SENSOR_PERIOD_S = 1.0 / 15.0
 LOOP_PERIOD_S = 1.0
 FILTER_WINDOW = 15
 SENSOR_FAULT_TIMEOUT_S = 2.0
+# Warm-up check: at or above this heater output, the temperature must rise by the
+# minimum within the window, or the heater or probe is faulty (e.g. probe fell out).
+HEATING_CHECK_OUTPUT_PERCENT = 80.0
+HEATING_CHECK_WINDOW_S = 20.0
+HEATING_CHECK_MIN_RISE_C = 0.5
 PID_KP = 10.0
 PID_KI = 0.1
 PID_KD = 1.0

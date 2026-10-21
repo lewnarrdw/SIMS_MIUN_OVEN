@@ -43,6 +43,7 @@ class Controller:
         self.hold_min = self.hold_min_time = None
         self.hold_completed = False
         self.peak_tracker = PeakTracker()
+        self.heat_check_since = self.heat_check_temperature = None
     @property
     def active(self): return self.state in (State.DOOR_MOVING, State.HEATING, State.HOLDING, State.COOLING)
     def start(self, now, target, hold_s, gains, temperature):
@@ -67,6 +68,7 @@ class Controller:
         self.peak_tracker = PeakTracker()
         self.completion_allowed = True
         self.fault_reason = ""
+        self.heat_check_since = self.heat_check_temperature = None
         if self.hw.switches.state() == DoorState.CLOSED:
             self.heating_start_temperature = temperature
             self._set_state(State.HEATING, "Warming up")
@@ -129,6 +131,21 @@ class Controller:
         self.hold_completed = False
         self.completion_allowed = True
         self._set_state(State.READY, "Ready to run")
+    def _heater_not_heating(self, now, temperature):
+        """True when high heater output has not raised the temperature within the check window."""
+        if self.hw.heater.percent < self.config.HEATING_CHECK_OUTPUT_PERCENT:
+            self.heat_check_since = None
+            return False
+        if self.heat_check_since is None:
+            self.heat_check_since, self.heat_check_temperature = now, temperature
+            return False
+        if now - self.heat_check_since < self.config.HEATING_CHECK_WINDOW_S:
+            return False
+        if temperature - self.heat_check_temperature < self.config.HEATING_CHECK_MIN_RISE_C:
+            return True
+        # Enough rise: start the next window from here while output stays high.
+        self.heat_check_since, self.heat_check_temperature = now, temperature
+        return False
     def fault(self, reason):
         self.hw.heater.emergency_off(); self.hw.motor.stop()
         self.fault_reason = reason; self._set_state(State.FAULT, f"Fault: {reason.replace('_',' ')}")
@@ -163,6 +180,9 @@ class Controller:
                 self.last_pid_time = now
                 feedforward = max(0.0, self.config.FF_PERCENT_PER_DEGREE*(self.target-self.config.ROOM_TEMPERATURE))
                 self.hw.heater.set_percent(self.pid.update(self.target, temperature, dt, feedforward))
+            if self.state == State.HEATING and self._heater_not_heating(now, temperature):
+                self.fault("heater_not_heating")
+                return
             if self.state == State.HEATING:
                 start_temperature = self.heating_start_temperature
                 if start_temperature is not None and abs(self.target - start_temperature) > self.config.STABLE_TOLERANCE:

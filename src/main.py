@@ -8,8 +8,16 @@ from types import SimpleNamespace
 from PySide6 import QtCore, QtGui, QtWidgets
 import config
 import gui
-from application import Application, describe_fault
+from application import LATCHED_FAULTS, Application, describe_fault
 from data_manager import DataManager
+
+
+def event_severity(event: dict) -> str | None:
+    """Return an event's severity; older run files only mark faults and E-Stops by type."""
+    severity = event.get("severity")
+    if severity is None:
+        severity = {"run_faulted": "error", "emergency_stop": "error"}.get(event.get("type"))
+    return severity
 
 
 class KilnWindow(gui.OvenWindow):
@@ -81,6 +89,18 @@ class KilnWindow(gui.OvenWindow):
     def manual_command(self, name):
         self.service.command(name)
 
+    def _update_manual_actions(self, view):
+        """Grey out manual controls the worker would reject in the live state."""
+        door_moving = getattr(view, "door_motor", "idle") in ("opening", "closing")
+        door_enabled = not view.running and not door_moving
+        enabled = {
+            "Open door": door_enabled,
+            "Close door": door_enabled,
+            "Heater on": not view.running and view.state not in ("fault", "e_stop"),
+        }
+        for label, action in self.manual_actions.items():
+            action.setEnabled(enabled.get(label, True))
+
     def _begin_live_run(self, view):
         """Clear the graph for a new run, however it was started."""
         self._historical_record = None
@@ -109,6 +129,7 @@ class KilnWindow(gui.OvenWindow):
     def refresh(self):
         live_view, live_samples = self.service.snapshot()
         self.set_emergency_stop(getattr(live_view, "estop_active", False))
+        self._update_manual_actions(live_view)
         run_started_at = getattr(live_view, "run_started_at", None)
         if run_started_at is not None and run_started_at != self._live_run_started_at:
             self._live_run_started_at = run_started_at
@@ -213,7 +234,8 @@ class KilnWindow(gui.OvenWindow):
                 stage_detail = f"Average error: {sum(errors) / len(errors):.2f} °C"
         show_fault = state == "fault" and bool(view.detail)
         if show_fault:
-            stage_detail = f"Cause: {describe_fault(view.detail)}. Fix it to continue."
+            next_step = "Fix it, then press Reset." if view.detail in LATCHED_FAULTS else "Fix it to continue."
+            stage_detail = f"Cause: {describe_fault(view.detail)}. {next_step}"
         if show_fault != self._stage_detail_shows_fault:
             self._stage_detail_shows_fault = show_fault
             self.stage_detail_label.setStyleSheet(
@@ -226,7 +248,12 @@ class KilnWindow(gui.OvenWindow):
         output = getattr(view, "output_percent", None)
         self.temperature_label.setText("N/A" if temperature is None else f"{temperature:.1f} °C")
         self.output_label.setText("N/A" if output is None else f"{output:.0f} %")
-        self.target_status_label.setText(f"Target {view.target_c:.1f} °C")
+        label_target_c = view.target_c
+        start_target_c = getattr(view, "start_target_c", None)
+        if self._historical_record is None and not view.running and start_target_c is not None:
+            # Between live runs the controller keeps its last target; show the next run's.
+            label_target_c = start_target_c
+        self.target_status_label.setText(f"Target {label_target_c:.1f} °C")
         hold_elapsed = getattr(view, "hold_elapsed_s", 0.0) or 0.0
         hold_remaining = max(0.0, self.hold_input.value() - hold_elapsed)
         hold_minutes, hold_seconds = divmod(hold_remaining, 60.0)
@@ -391,9 +418,7 @@ class KilnWindow(gui.OvenWindow):
             lines = []
             for event in events:
                 elapsed = event["elapsed_s"]
-                severity = event.get("severity")
-                if severity is None:
-                    severity = {"run_faulted": "error", "emergency_stop": "error"}.get(event.get("type"))
+                severity = event_severity(event)
                 tag = f"[{severity.upper()}] " if severity else ""
                 line = f"{int(elapsed // 60):02d}:{elapsed % 60:05.2f}  {tag}{event['description']}"
                 changes = event.get("changes", {})
@@ -446,7 +471,7 @@ class KilnWindow(gui.OvenWindow):
         run_key = getattr(view, "run_started_at", None) or "current"
         for event in (() if self._historical_record is not None else getattr(view, "events", ())):
             event_type = event.get("type", "")
-            severity = {"run_faulted": "error", "emergency_stop": "error"}.get(event_type)
+            severity = event_severity(event)
             if severity:
                 key = (run_key, event.get("elapsed_s"), event_type, event.get("description"))
                 add_attention(key, severity, event.get("description", "Attention event"),
