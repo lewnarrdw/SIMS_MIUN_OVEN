@@ -47,7 +47,7 @@ class Controller:
     def active(self): return self.state in (State.DOOR_MOVING, State.HEATING, State.HOLDING, State.COOLING)
     def start(self, now, target, hold_s, gains, temperature):
         if self.active: return
-        if self.state not in (State.READY, State.COMPLETE, State.ABORTED): raise RuntimeError("Reset the safety fault before starting another run")
+        if self.state not in (State.READY, State.COMPLETE, State.ABORTED): raise RuntimeError("Resolve the safety condition before starting another run")
         if temperature is None: raise RuntimeError("Waiting for a valid temperature reading")
         self.target = self.safety.validate_setpoint(target)
         self.hold_s = min(self.config.HOLD_DURATION_MAX_S, max(self.config.HOLD_DURATION_MIN_S, float(hold_s)))
@@ -111,6 +111,23 @@ class Controller:
             raise RuntimeError(f"Cannot reset while safety condition remains: {fault or 'emergency stop'}")
         self.hw.motor.clear_fault(); self.hw.heater.unlock(); self.hw.heater.off()
         self.fault_reason = ""; self.run_started = None; self.run_ended = None; self.hold_completed = False; self.completion_allowed = True
+        self._set_state(State.READY, "Ready to run")
+    def release_emergency_stop(self):
+        """Clear only the E-Stop latch after the physical circuit is released."""
+        self._clear_safety_latch(State.E_STOP)
+    def recover_safety_fault(self):
+        """Return to ready after the active safety condition has cleared."""
+        self._clear_safety_latch(State.FAULT)
+    def _clear_safety_latch(self, expected_state):
+        if self.state != expected_state:
+            return
+        self.hw.heater.unlock()
+        self.hw.heater.off()
+        self.fault_reason = ""
+        self.run_started = None
+        self.run_ended = None
+        self.hold_completed = False
+        self.completion_allowed = True
         self._set_state(State.READY, "Ready to run")
     def fault(self, reason):
         self.hw.heater.emergency_off(); self.hw.motor.stop()

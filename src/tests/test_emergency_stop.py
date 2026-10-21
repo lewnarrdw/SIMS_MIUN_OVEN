@@ -212,8 +212,7 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
         self.assertIn("emergency_stop", [event["type"] for event in view.events])
 
     def test_estop_edge_callback_ends_run(self) -> None:
-        callback = (self.hardware.estop_device.when_deactivated if config.ESTOP_NORMALLY_CLOSED
-                    else self.hardware.estop_device.when_activated)
+        callback = self.hardware.estop_device.when_activated
 
         callback()
 
@@ -252,6 +251,20 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
         self.assertIsNotNone(self.app.last_run_record)
         self.assertEqual(self.app.last_run_record["result"]["state"], "e_stop")
         self.assertTrue(view.can_start)
+
+    def test_releasing_estop_clears_emergency_then_fault_clears_when_condition_is_fixed(self) -> None:
+        self.hardware.estop_engaged = True
+        self.assertTrue(wait_for(lambda: self.state() == "e_stop"))
+        self.hardware.sensor.temperature_c = float("nan")
+
+        self.hardware.estop_engaged = False
+
+        self.assertTrue(wait_for(lambda: self.state() == "fault"))
+        self.assertEqual(self.app.snapshot()[0].detail, "sensor_invalid")
+
+        self.hardware.sensor.temperature_c = 22.0
+
+        self.assertTrue(wait_for(lambda: self.state() == "ready"))
 
 
 class FakeService:

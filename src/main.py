@@ -213,7 +213,7 @@ class KilnWindow(gui.OvenWindow):
                 stage_detail = f"Average error: {sum(errors) / len(errors):.2f} °C"
         show_fault = state == "fault" and bool(view.detail)
         if show_fault:
-            stage_detail = f"Cause: {describe_fault(view.detail)}. Fix it, then press Reset."
+            stage_detail = f"Cause: {describe_fault(view.detail)}. Fix it to continue."
         if show_fault != self._stage_detail_shows_fault:
             self._stage_detail_shows_fault = show_fault
             self.stage_detail_label.setStyleSheet(

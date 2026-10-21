@@ -24,8 +24,8 @@ STOP_BUTTON_ACTIVE_LOW = False
 BUTTON_OPEN_PIN = 19
 BUTTON_CLOSE_PIN = 26
 ESTOP_SENSE_PIN = 25
-# The Pi input reads pressed/LOW when the E-STOP is engaged.
-ESTOP_NORMALLY_CLOSED = False
+# GPIO 25 reads LOW while the E-STOP is engaged and HIGH while released.
+ESTOP_ACTIVE_LOW = True
 MIN_SETPOINT = 30.0
 MAX_SETPOINT = 45.0
 MAX_TEMPERATURE = 50.0

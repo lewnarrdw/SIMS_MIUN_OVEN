@@ -95,8 +95,7 @@ class Application:
             self.hw.buttons[name].when_pressed = lambda name=name: self.command(name)
         # The E-Stop circuit cuts power itself; the app only listens so it can end the run.
         callback = lambda: self.command("emergency", "emergency_stop")
-        if config.ESTOP_NORMALLY_CLOSED: self.hw.estop_device.when_deactivated = callback
-        else: self.hw.estop_device.when_activated = callback
+        self.hw.estop_device.when_activated = callback
         self._thread = threading.Thread(target=self._run, name="kiln-control", daemon=False)
         self._thread.start()
     def command(self, name, values=None):
@@ -174,7 +173,9 @@ class Application:
         allowed_state = state in (State.READY, State.COMPLETE, State.ABORTED)
         reason = ""
         if not allowed_state:
-            reason = "Reset the safety fault before starting" if state in (State.FAULT, State.E_STOP) else "A run is already in progress"
+            reason = "Release the E-Stop before starting" if state == State.E_STOP else (
+                "Safety fault is active" if state == State.FAULT else "A run is already in progress"
+            )
         else:
             reason = self.controller.safety.check(
                 self._current_temperature_c, self._sensor_age_s, self.hw.switches.state(),
@@ -245,10 +246,10 @@ class Application:
             try:
                 if ((self.controller.state == State.E_STOP or self._estop_active)
                         and name in ("start", "open", "close", "heater_on")):
-                    raise RuntimeError("Emergency stop is active; release it and press Reset before using the heater or door")
+                    raise RuntimeError("Emergency stop is active; release it before using the heater or door")
                 if (self.controller.state == State.FAULT
                         and name in ("start", "open", "close", "heater_on")):
-                    raise RuntimeError("Safety fault is latched; reset it before using the heater or door")
+                    raise RuntimeError("Safety fault is active; resolve it before using the heater or door")
                 if name == "start":
                     if self.controller.active:
                         if self._manual_override_active:
@@ -367,12 +368,31 @@ class Application:
                 elif self.controller.state == State.E_STOP:
                     # The physical switch is the E-Stop latch. Recover on release
                     # without clearing the just-finished run's samples or events.
-                    try:
-                        self.controller.reset(now, temperature, age, False)
-                    except RuntimeError:
-                        # Other active safety faults still require operator reset.
-                        pass
+                    self.controller.release_emergency_stop()
+                    remaining_fault = self.controller.safety.check(
+                        temperature, age, self.hw.switches.state(),
+                        self.hw.motor.fault_reason, False, False,
+                    )
+                    if remaining_fault:
+                        self.controller.fault(remaining_fault)
                     else:
+                        self._run_started_monotonic = None
+                        self._event_log_closed = True
+                elif self.controller.state == State.FAULT:
+                    door = self.hw.switches.state()
+                    if (self.hw.motor.state.value == "fault"
+                            and self.hw.motor.goal == door):
+                        self.hw.motor.clear_fault()
+                    position_fault = self.controller.fault_reason in (
+                        "door_not_in_position", "door_motor_timeout",
+                        "door_motor_switch_error",
+                    ) and self.controller.door_goal is not None and door != self.controller.door_goal
+                    remaining_fault = self.controller.safety.check(
+                        temperature, age, door, self.hw.motor.fault_reason,
+                        False, False,
+                    ) or (self.controller.fault_reason if position_fault else None)
+                    if not remaining_fault:
+                        self.controller.recover_safety_fault()
                         self._run_started_monotonic = None
                         self._event_log_closed = True
                 self.hw.motor.update(now)

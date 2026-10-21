@@ -63,13 +63,12 @@ def create_hardware(config):
         }
         # Avoid Button bounce filtering on the safety input.
         estop_device = DigitalInputDevice(
-            config.ESTOP_SENSE_PIN, pull_up=True,
+            config.ESTOP_SENSE_PIN,
+            pull_up=None,
+            active_state=not config.ESTOP_ACTIVE_LOW,
         )
         devices.append(estop_device)
-        estop = lambda: (
-            not estop_device.is_active if config.ESTOP_NORMALLY_CLOSED
-            else estop_device.is_active
-        )
+        estop = lambda: estop_device.is_active
         tower_outputs = {
             name: output(pin, not config.RELAY_ACTIVE_LOW)
             for name, pin in config.TOWER_PINS.items()

@@ -37,6 +37,7 @@ class DoorMotor:
         self.in1, self.in2, self.enable = in1, in2, enable
         self.switches, self.timeout_s = switches, timeout_s
         self.state, self.started_at, self.fault_reason = MotorState.IDLE, None, None
+        self.goal = None
     def _drive(self, opening, now):
         self.stop()
         (self.in1 if opening else self.in2).on()
@@ -48,8 +49,14 @@ class DoorMotor:
     def _move(self, goal, now):
         if self.state == MotorState.FAULT: return
         state = self.switches.state()
-        if state == DoorState.ERROR: self._fail("switch_error")
-        elif state != goal: self._drive(goal == DoorState.OPEN, now)
+        if state == DoorState.ERROR:
+            self.goal = goal
+            self._fail("switch_error")
+        elif state != goal:
+            self._drive(goal == DoorState.OPEN, now)
+            self.goal = goal
+        else:
+            self.goal = None
     def stop(self):
         self.in1.off(); self.in2.off()
         if self.enable is not None: self.enable.off()
@@ -62,11 +69,14 @@ class DoorMotor:
         goal = DoorState.OPEN if self.state == MotorState.OPENING else DoorState.CLOSED
         state = self.switches.state()
         if state == DoorState.ERROR: self._fail("switch_error")
-        elif state == goal: self.stop()
+        elif state == goal:
+            self.goal = None
+            self.stop()
         elif now - self.started_at >= self.timeout_s: self._fail("timeout")
     def clear_fault(self):
         self.stop()
         self.state, self.fault_reason = MotorState.IDLE, None
+        self.goal = None
     def close(self):
         self.stop()
         self.in1.close(); self.in2.close()
