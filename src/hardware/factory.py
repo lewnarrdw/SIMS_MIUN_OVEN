@@ -61,14 +61,15 @@ def create_hardware(config):
                 "open": config.BUTTON_OPEN_PIN, "close": config.BUTTON_CLOSE_PIN,
             }.items()
         }
-        # Avoid Button bounce filtering on the safety input. Keep the internal
-        # pull resistor: without it the released (open) switch floats and can
-        # read as permanently engaged. The pull direction sets the polarity.
+        # Avoid Button bounce filtering on the safety input. The E-Stop circuit
+        # drives the released level only while powered, so pull toward the
+        # engaged level: power loss or a broken wire then reads as engaged. The
+        # device is therefore active only while the release signal is present.
         estop_device = DigitalInputDevice(
-            config.ESTOP_SENSE_PIN, pull_up=config.ESTOP_ACTIVE_LOW,
+            config.ESTOP_SENSE_PIN, pull_up=not config.ESTOP_ACTIVE_LOW,
         )
         devices.append(estop_device)
-        estop = lambda: estop_device.is_active
+        estop = lambda: not estop_device.is_active
         tower_outputs = {
             name: output(pin, not config.RELAY_ACTIVE_LOW)
             for name, pin in config.TOWER_PINS.items()

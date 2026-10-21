@@ -212,7 +212,7 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
         self.assertIn("emergency_stop", [event["type"] for event in view.events])
 
     def test_estop_edge_callback_ends_run(self) -> None:
-        callback = self.hardware.estop_device.when_activated
+        callback = self.hardware.estop_device.when_deactivated
 
         callback()
 

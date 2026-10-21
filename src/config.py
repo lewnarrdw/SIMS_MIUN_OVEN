@@ -25,7 +25,8 @@ STOP_BUTTON_ACTIVE_LOW = False
 BUTTON_OPEN_PIN = 19
 BUTTON_CLOSE_PIN = 26
 ESTOP_SENSE_PIN = 25
-# GPIO 25 reads LOW while the E-STOP is engaged and HIGH while released.
+# GPIO 25 reads LOW while the E-STOP is engaged and HIGH while released. The circuit
+# drives HIGH only while powered; an internal pull-down makes power loss read as engaged.
 ESTOP_ACTIVE_LOW = True
 MIN_SETPOINT = 30.0
 MAX_SETPOINT = 45.0

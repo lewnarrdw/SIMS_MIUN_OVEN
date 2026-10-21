@@ -95,7 +95,8 @@ class Application:
             self.hw.buttons[name].when_pressed = lambda name=name: self.command(name)
         # The E-Stop circuit cuts power itself; the app only listens so it can end the run.
         callback = lambda: self.command("emergency", "emergency_stop")
-        self.hw.estop_device.when_activated = callback
+        # The E-Stop input is active while the release signal is present; losing it means engaged.
+        self.hw.estop_device.when_deactivated = callback
         self._thread = threading.Thread(target=self._run, name="kiln-control", daemon=False)
         self._thread.start()
     def command(self, name, values=None):
