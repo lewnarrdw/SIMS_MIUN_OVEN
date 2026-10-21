@@ -316,12 +316,23 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.assertFalse(self.window.estop_banner.isHidden())
         self.assertIn("EMERGENCY STOP", self.window.estop_banner.text())
         self.assertTrue(self.window.centralWidget().property("emergencyStop"))
-        self.assertFalse(any(self.toolbar_actions_enabled()))
+        enabled = [action for action in self.window.process_toolbar.actions() if action.isEnabled()]
+        self.assertEqual(enabled, [self.window.event_log_action])
         self.assertTrue(self.window.controls_box.isEnabled())
         self.assertTrue(self.window.pid_toggle.isEnabled())
         self.assertFalse(self.window.hold_input.isEnabled())
         self.window.pid_toggle.setChecked(True)
         self.assertFalse(self.window.pid_controls.isHidden())
+
+    def test_event_log_opens_during_engaged_estop(self) -> None:
+        self.set_view(state="e_stop", estop_active=True)
+        opened = []
+
+        with mock.patch.object(QtWidgets.QDialog, "exec", lambda dialog: opened.append(dialog) or 0):
+            self.window.event_log_action.trigger()
+
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(opened[0].windowTitle(), "Run events")
 
     def test_releasing_estop_restores_controls_without_reset_prompt(self) -> None:
         self.set_view(state="e_stop", estop_active=True)

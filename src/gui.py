@@ -1588,7 +1588,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             self._pre_emergency_enabled = {action: action.isEnabled() for action in actions}
         if active:
             for action in actions:
-                action.setEnabled(False)
+                # The event log is read-only, so it stays available for diagnosis.
+                action.setEnabled(action is self.event_log_action)
             for control in (
                 self.target_input, self.hold_input,
                 self.kp_enable, self.ki_enable, self.kd_enable,
