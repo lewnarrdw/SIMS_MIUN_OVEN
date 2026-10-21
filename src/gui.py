@@ -646,6 +646,18 @@ class OvenWindow(QtWidgets.QMainWindow):
             QMenu { background: #1c1f24; color: #e4e7eb; border: 1px solid #343a43; }
             QMenu::item { padding: 6px 24px; }
             QMenu::item:selected { background: #262b32; }
+            QDialog { background-color: #15171b; }
+            QPlainTextEdit, QTextEdit { background: #1c1f24; border: 1px solid #262a31;
+                border-radius: 8px; padding: 6px; color: #e4e7eb;
+                font-family: "IBM Plex Mono"; font-size: 10pt;
+                selection-background-color: #262b32; selection-color: #f2f4f7; }
+            QScrollBar:vertical { background: #1c1f24; width: 10px; margin: 0; border: none; }
+            QScrollBar:horizontal { background: #1c1f24; height: 10px; margin: 0; border: none; }
+            QScrollBar::handle:vertical { background: #343a43; border-radius: 4px; min-height: 24px; }
+            QScrollBar::handle:horizontal { background: #343a43; border-radius: 4px; min-width: 24px; }
+            QScrollBar::handle:hover { background: #454c57; }
+            QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; }
+            QScrollBar::add-page, QScrollBar::sub-page { background: none; }
             QFrame#plotPanel { background: #1c1f24; border: 1px solid #262a31; border-radius: 12px; }
             QLineEdit:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled {
                 color: #6b7079; background: #1a1c20; border-color: #2a2e35; }
