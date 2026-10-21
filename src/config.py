@@ -16,6 +16,7 @@ DOOR_LIMIT_OPEN_PIN = 20
 DOOR_LIMIT_CLOSED_PIN = 16
 DOOR_TIMEOUT_S = 10.0
 TOWER_PINS = {"red": 22, "yellow": 17, "green": 23, "white": 24, "buzzer": 27}
+BUZZER_TEST_S = 1.0  # How long Manual controls > Test buzzer sounds the buzzer
 RELAY_ACTIVE_LOW = True
 BUTTON_START_PIN = 13
 BUTTON_STOP_PIN = 21

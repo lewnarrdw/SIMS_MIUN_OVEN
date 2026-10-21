@@ -83,10 +83,23 @@ class DoorMotor:
         if self.enable is not None: self.enable.close()
 
 class SignalTower:
-    def __init__(self, outputs): self.outputs = outputs
+    def __init__(self, outputs):
+        self.outputs = outputs
+        self.state = "ready"
+        self.buzzer_test_until = None
     def show(self, state):
+        self.state = state
         color = "red" if state in ("fault", "e_stop") else "yellow" if state in ("door_moving", "heating", "holding", "cooling") else "green"
+        buzzer = state in ("fault", "e_stop") or self.buzzer_test_until is not None
         for name, output in self.outputs.items():
-            output.on() if name == color or (name == "buzzer" and state in ("fault", "e_stop")) else output.off()
+            output.on() if name == color or (name == "buzzer" and buzzer) else output.off()
+    def test_buzzer(self, now, duration_s):
+        """Sound the buzzer briefly; update() ends the test without blocking."""
+        self.buzzer_test_until = now + duration_s
+        self.show(self.state)
+    def update(self, now):
+        if self.buzzer_test_until is not None and now >= self.buzzer_test_until:
+            self.buzzer_test_until = None
+            self.show(self.state)
     def close(self):
         for output in self.outputs.values(): output.off(); output.close()

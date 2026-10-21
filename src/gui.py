@@ -796,7 +796,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         for label, command_name in (
             ("Open door", "open"),
             ("Close door", "close"),
-            ("Read temperature", "read_temperature"),
+            ("Test buzzer", "test_buzzer"),
             ("Heater on", "heater_on"),
             ("Heater off", "heater_off"),
         ):
@@ -810,7 +810,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.manual_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.manual_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         self.manual_button.setMenu(self.manual_menu)
-        self.manual_button.setToolTip("Open door, close door, read temperature, or control the heater")
+        self.manual_button.setToolTip("Open door, close door, test the buzzer, or control the heater")
         toolbar.addWidget(self.manual_button)
 
     @staticmethod

@@ -332,10 +332,8 @@ class Application:
                         raise RuntimeError("Manual door controls are unavailable during a run")
                     self._manual_override_active = True
                     self.hw.motor.close_door(now)
-                elif name == "read_temperature":
-                    self.hw.sensor.update(now)
-                    self._current_temperature_c = self.hw.sensor.temperature()
-                    self._sensor_age_s = self.hw.sensor.seconds_since_valid(now)
+                elif name == "test_buzzer":
+                    self.hw.tower.test_buzzer(now, self.config.BUZZER_TEST_S)
                 elif name == "heater_on":
                     if self.controller.active:
                         raise RuntimeError("Manual heating is unavailable during a run")
@@ -420,6 +418,7 @@ class Application:
                     self._flush_pid_event()
                     self._event_log_closed = True
                 self.hw.heater.update(now)
+                self.hw.tower.update(now)
                 self._publish()
                 next_tick += period
                 self._closing.wait(max(0.0, next_tick-time.monotonic()))
