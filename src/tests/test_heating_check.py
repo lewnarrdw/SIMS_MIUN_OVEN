@@ -1,5 +1,6 @@
 """Tests for detecting a heater or temperature probe that does not respond during warm-up."""
 
+import math
 import os
 import tempfile
 import unittest
@@ -51,7 +52,8 @@ class HeatingCheckControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.state, State.HEATING)
 
     def test_rising_temperature_does_not_fault(self) -> None:
-        self.run_warm_up(22.0, 0.1, 3 * WINDOW_S)
+        # Stay below the target so the heater output remains in the checked range.
+        self.run_warm_up(22.0, 3 * MIN_RISE_C / WINDOW_S, 3 * WINDOW_S)
 
         self.assertEqual(self.controller.state, State.HEATING)
 
@@ -62,6 +64,22 @@ class HeatingCheckControllerTests(unittest.TestCase):
 
     def test_rise_at_minimum_does_not_fault(self) -> None:
         self.run_warm_up(22.0, (MIN_RISE_C * 1.2) / WINDOW_S, WINDOW_S + 1)
+
+        self.assertEqual(self.controller.state, State.HEATING)
+
+    def test_slow_starting_heater_does_not_fault(self) -> None:
+        # Heater element lag and probe dead time: almost no rise in the first 20 s.
+        gain_c, oven_lag_s, heater_lag_s, dead_time_s = 60.0, 600.0, 60.0, 8.0
+
+        def lagged_rise(elapsed_s: float) -> float:
+            t = max(0.0, elapsed_s - dead_time_s)
+            return gain_c * (1 - (oven_lag_s * math.exp(-t / oven_lag_s)
+                                  - heater_lag_s * math.exp(-t / heater_lag_s)) / (oven_lag_s - heater_lag_s))
+
+        self.assertLess(lagged_rise(20.0), 0.5)
+        self.controller.start(0.0, 45.0, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD), 22.0)
+        for second in range(int(2 * WINDOW_S)):
+            self.controller.step(float(second), 22.0 + lagged_rise(second), 0.0, False, True)
 
         self.assertEqual(self.controller.state, State.HEATING)
 

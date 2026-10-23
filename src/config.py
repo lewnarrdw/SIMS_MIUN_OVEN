@@ -42,9 +42,11 @@ FILTER_WINDOW = 15
 SENSOR_FAULT_TIMEOUT_S = 2.0
 # Warm-up check: at or above this heater output, the temperature must rise by the
 # minimum within the window, or the heater or probe is faulty (e.g. probe fell out).
+# The window must outlast the heater element lag: a slow heater can barely move the
+# probe in the first 20 s from cold. Tune both values from a logged run on the real oven.
 HEATING_CHECK_OUTPUT_PERCENT = 80.0
-HEATING_CHECK_WINDOW_S = 20.0
-HEATING_CHECK_MIN_RISE_C = 0.5
+HEATING_CHECK_WINDOW_S = 120.0
+HEATING_CHECK_MIN_RISE_C = 1.0
 PID_KP = 10.0
 PID_KI = 0.1
 PID_KD = 1.0
