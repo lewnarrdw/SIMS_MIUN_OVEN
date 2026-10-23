@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
@@ -187,6 +188,65 @@ class EventLogTests(unittest.TestCase):
 
         descriptions = [event["description"] for event in self.events_of("manual_control")]
         self.assertEqual(descriptions, ["Manual: buzzer test", "Manual: door opening"])
+
+    def test_events_record_wall_clock_time(self) -> None:
+        event = self.events()[0]
+
+        self.assertEqual(datetime.fromisoformat(event["time"]).date(), datetime.now().date())
+        self.assertNotIn("run_elapsed_s", event)
+
+    def test_run_events_record_time_since_the_run_started(self) -> None:
+        self.start_run()
+
+        started = self.wait_for_event("run_started")[0]
+
+        self.assertEqual(started["run_elapsed_s"], started["elapsed_s"])
+
+    def test_start_during_cool_down_is_rejected_with_a_reason(self) -> None:
+        self.app.close()
+        self.data_directory.cleanup()
+        self.data_directory = tempfile.TemporaryDirectory()
+        test_config = SimpleNamespace(**{name: getattr(config, name) for name in dir(config) if name.isupper()})
+        test_config.DATA_DIRECTORY = self.data_directory.name
+        test_config.STABLE_TIME_S = 0.1
+        self.hardware = FakeHardware()
+        self.hardware.sensor.temperature_c = 45.0
+        with mock.patch.object(application, "create_hardware", return_value=self.hardware):
+            self.app = Application(test_config)
+        self.app.command("settings", {"target_temperature_c": 45.0, "hold_duration_s": 1.0,
+                                      "kp": config.PID_KP, "ki": config.PID_KI, "kd": config.PID_KD})
+        self.start_run()
+        self.assertTrue(wait_for(lambda: self.state() == "cooling", timeout_s=5.0))
+
+        self.app.command("start")
+
+        rejected = self.wait_for_event("command_rejected")
+        self.assertEqual(rejected[0]["description"],
+                         "Start rejected: Wait for the cool-down to finish before starting a new run")
+        self.assertEqual(self.state(), "cooling")
+        self.assertEqual(self.app.snapshot()[0].ready_reason, "Wait for the cool-down to finish")
+
+    def test_reset_keeps_the_fault_history(self) -> None:
+        self.start_run()
+        self.app.controller.heat_check_since = None
+        self.hardware.sensor.temperature_c = 60.0
+        self.wait_for_event("run_faulted")
+        self.hardware.sensor.temperature_c = 22.0
+        self.wait_for_event("fault_cleared")
+
+        self.app.command("reset")
+
+        reset = self.wait_for_event("reset")[0]
+        self.assertIn("run_faulted", [event["type"] for event in self.events()])
+        self.assertNotIn("run_elapsed_s", reset)
+
+    def test_door_between_limit_switches_is_its_own_event(self) -> None:
+        self.hardware.door_closed.is_active = False
+
+        between = self.wait_for_event("door_between")
+
+        self.assertEqual(between[0]["description"], "Door between limit switches")
+        self.assertEqual(self.events_of("door_closed"), [])
 
     def test_event_log_is_capped(self) -> None:
         self.app.close()

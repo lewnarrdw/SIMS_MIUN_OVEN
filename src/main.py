@@ -10,14 +10,7 @@ import config
 import gui
 from application import LATCHED_FAULTS, Application, describe_fault
 from data_manager import DataManager
-
-
-def event_severity(event: dict) -> str | None:
-    """Return an event's severity; older run files only mark faults and E-Stops by type."""
-    severity = event.get("severity")
-    if severity is None:
-        severity = {"run_faulted": "error", "emergency_stop": "error"}.get(event.get("type"))
-    return severity
+from event_log import EventLogDialog, event_severity
 
 
 class KilnWindow(gui.OvenWindow):
@@ -191,7 +184,9 @@ class KilnWindow(gui.OvenWindow):
             self.duty_curve.setData([], [])
         state = view.state
         self.run_action.setText("Run")
-        self.run_action.setToolTip("Start a new run")
+        can_start = getattr(live_view, "can_start", True)
+        self.run_action.setToolTip("Start a new run" if can_start else
+                                   f"Cannot start: {getattr(live_view, 'ready_reason', 'process is busy')}")
         progress_stage = {"ready": 0, "heating": 1, "holding": 2, "cooling": 3,
                           "complete": 4}.get(state, -1)
         if state == "aborted":
@@ -410,44 +405,23 @@ class KilnWindow(gui.OvenWindow):
         self.target_input.setValue(min(45.0, config.MAX_SETPOINT))
         self.hold_input.setValue(60.0)
 
+    def _event_log_events(self):
+        if self._historical_record is not None:
+            events = list(self._historical_record.get("events", ()))
+        else:
+            events = list(self.service.snapshot()[0].events)
+        return events + [event for event in self._attention_events if event.get("type") == "attention"]
+
     def show_run_events(self):
         view, _ = self.service.snapshot()
-        events = (self._historical_record or {}).get("events", ()) if self._historical_record else view.events
-        events = list(events) + [event for event in self._attention_events
-                                 if event.get("type") == "attention"]
-        if not events:
-            text = "No events recorded for this run."
-        else:
-            lines = []
-            for event in events:
-                elapsed = event["elapsed_s"]
-                severity = event_severity(event)
-                tag = f"[{severity.upper()}] " if severity else ""
-                line = f"{int(elapsed // 60):02d}:{elapsed % 60:05.2f}  {tag}{event['description']}"
-                changes = event.get("changes", {})
-                if changes:
-                    values = ", ".join(
-                        f"{key}: {change['from']} -> {change['to']}"
-                        for key, change in changes.items()
-                    )
-                    line += f" ({values})"
-                lines.append(line)
-            text = "\n".join(lines)
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Run events")
-        dialog.resize(680, 460)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        event_text = QtWidgets.QPlainTextEdit(dialog)
-        event_text.setReadOnly(True)
-        event_text.setPlainText(text)
-        layout.addWidget(event_text)
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close, parent=dialog)
-        buttons.rejected.connect(dialog.reject)
-        buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
+        # The log keeps following the live run while open; an imported run is fixed.
+        dialog = EventLogDialog(self._event_log_events, live=self._historical_record is None, parent=self)
         self._unread_attention.clear()
         self._update_attention_badge(view)
         dialog.exec()
+        # Events that arrived while the log was open have been seen.
+        self._unread_attention.clear()
+        self._refresh_event_log_icon()
 
     def _update_attention_badge(self, view):
         def add_attention(key, severity, description, elapsed_s=0.0, event_type="attention"):
@@ -455,7 +429,8 @@ class KilnWindow(gui.OvenWindow):
                 return
             self._seen_attention.add(key)
             event = {"elapsed_s": elapsed_s, "type": event_type,
-                     "description": description, "severity": severity}
+                     "description": description, "severity": severity,
+                     "time": datetime.now().astimezone().isoformat(timespec="milliseconds")}
             self._attention_events.append(event)
             self._unread_attention[key] = event
 

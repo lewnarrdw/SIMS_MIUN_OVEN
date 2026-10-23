@@ -2,6 +2,7 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import datetime
 from queue import Empty, SimpleQueue
 import threading
 import time
@@ -70,6 +71,12 @@ FAULT_DESCRIPTIONS = {
 }
 # Faults with no live condition to re-check stay latched until the operator presses Reset.
 LATCHED_FAULTS = frozenset({"heater_not_heating"})
+DOOR_EVENTS = {
+    "open": ("door_opened", "Door open"),
+    "closed": ("door_closed", "Door closed"),
+    "between": ("door_between", "Door between limit switches"),
+    "error": ("door_switch_conflict", "Door limit switches both pressed"),
+}
 # Door faults clear once the door is back where the run expected it.
 DOOR_POSITION_FAULTS = frozenset({"door_not_in_position", "door_motor_timeout", "door_motor_switch_error"})
 
@@ -96,6 +103,7 @@ class Application:
         self._events = []
         # Event times count from the current run's start, or from startup before any run.
         self._event_base_monotonic = time.monotonic()
+        self._run_clock_active = False
         self._previous_run_outcome = None
         self._pending_pid_event = None
         self._append_event("app_started", "Application started")
@@ -162,8 +170,14 @@ class Application:
         return max(0.0, (time.monotonic() if now is None else now) - self._event_base_monotonic)
 
     def _append_event(self, event_type, description, now=None, **details):
+        monotonic_now = time.monotonic()
+        moment = monotonic_now if now is None else now
+        wall_time = datetime.fromtimestamp(time.time() - (monotonic_now - moment)).astimezone()
         event = {"elapsed_s": round(self._event_elapsed(now), 3), "type": event_type,
-                 "description": description}
+                 "description": description, "time": wall_time.isoformat(timespec="milliseconds")}
+        # Run time is only meaningful from a run start until the next reset.
+        if self._run_clock_active:
+            event["run_elapsed_s"] = event["elapsed_s"]
         event.update(details)
         self._events.append(event)
         self._events.sort(key=lambda item: item["elapsed_s"])
@@ -227,7 +241,8 @@ class Application:
         reason = ""
         if not allowed_state:
             reason = "Release the E-Stop before starting" if state == State.E_STOP else (
-                "Safety fault is active" if state == State.FAULT else "A run is already in progress"
+                "Safety fault is active" if state == State.FAULT else
+                "Wait for the cool-down to finish" if state == State.COOLING else "A run is already in progress"
             )
         else:
             reason = self.controller.safety.check(
@@ -308,10 +323,10 @@ class Application:
                     raise RuntimeError("Safety fault is active; resolve it before starting or heating")
                 if name == "start":
                     if self.controller.active:
-                        if self._manual_override_active:
-                            self._manual_override_active = False
-                            self.hw.heater.off()
-                        continue
+                        # A run that finished its hold stays active until it has cooled down.
+                        raise RuntimeError(
+                            "Wait for the cool-down to finish before starting a new run"
+                            if self.controller.state == State.COOLING else "A run is already in progress")
                     self._manual_override_active = False
                     self.hw.heater.off()
                     settings = self._start_settings
@@ -325,6 +340,7 @@ class Application:
                         self._error = ""
                         self._last_run_record = None
                     self._event_base_monotonic = now
+                    self._run_clock_active = True
                     self._pending_pid_event = None
                     previous = self._previous_run_outcome
                     if previous is None or previous == "completed":
@@ -357,11 +373,11 @@ class Application:
                 elif name == "reset":
                     self._manual_override_active = False
                     self.controller.reset(now, temperature, age, self.hw.estop())
-                    self._event_base_monotonic = now
-                    self._pending_pid_event = None
+                    self._flush_pid_event()
+                    # Keep the log so the fault that led to the reset can still be read.
+                    self._run_clock_active = False
                     with self._lock:
                         self.samples.clear()
-                        self._events.clear()
                         self._error = ""
                     self._append_event("reset", "Process reset", now)
                 elif name == "defaults":
@@ -490,8 +506,8 @@ class Application:
                 self.controller.step(now, temperature, age, self._estop_active, control_due)
                 door_state = self.hw.switches.state().value
                 if door_state != self._last_door_state:
-                    event_type = "door_opened" if door_state == "open" else "door_closed"
-                    self._append_event(event_type, f"Door {door_state}", now)
+                    event_type, description = DOOR_EVENTS.get(door_state, ("door_changed", f"Door {door_state}"))
+                    self._append_event(event_type, description, now)
                 self._last_door_state = door_state
                 self._record_state_transition(before_state, self.controller.state, now)
                 if self._pending_pid_event and now - self._pending_pid_event["last_change"] >= 0.6:
