@@ -51,3 +51,6 @@ PID_KD = 1.0
 ROOM_TEMPERATURE = 20.0
 FF_PERCENT_PER_DEGREE = 1.0
 DATA_DIRECTORY = "data"
+# Minimise button: None shows it only when a desktop session (with a taskbar) can
+# restore the window; True or False forces it. A kiosk-started Pi has no way back.
+SHOW_MINIMIZE_BUTTON = None

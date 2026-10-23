@@ -41,18 +41,20 @@ class PID:
 
         proportional = self.kp * error
         base_output = proportional + derivative + feedforward
-        unsaturated = base_output + self.integral
+        integral = self.integral + self.ki * error * dt
+        unsaturated = base_output + integral
         if math.isfinite(unsaturated):
             output = max(OUTPUT_MIN, min(OUTPUT_MAX, unsaturated))
         else:
             output = OUTPUT_MIN
 
-        # Back-calculation unwinds the integral when output reaches either limit.
-        tracking_step = ANTI_WINDUP_GAIN_PER_S * dt
-        self.integral = (
-            self.integral + self.ki * error * dt + tracking_step * (output - base_output)
-        ) / (1.0 + tracking_step)
-        self.integral = max(-INTEGRAL_OUTPUT_LIMIT, min(INTEGRAL_OUTPUT_LIMIT, self.integral))
+        # Back-calculation unwinds the integral only while the output is clamped, so
+        # unsaturated control integrates exactly Ki * error * dt. The step is capped at
+        # 1 so a long dt cannot push the integral past the limit it is tracking.
+        tracking_step = min(1.0, ANTI_WINDUP_GAIN_PER_S * dt)
+        if math.isfinite(unsaturated):
+            integral += tracking_step * (output - unsaturated)
+        self.integral = max(-INTEGRAL_OUTPUT_LIMIT, min(INTEGRAL_OUTPUT_LIMIT, integral))
 
         corrected = base_output + self.integral
         if not math.isfinite(corrected):

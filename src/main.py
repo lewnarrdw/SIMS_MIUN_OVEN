@@ -56,7 +56,7 @@ class KilnWindow(gui.OvenWindow):
         self.quit_action = QtGui.QAction("Quit", self)
         self.quit_action.setShortcut(QtGui.QKeySequence("Ctrl+Q"))
         self.quit_action.setShortcutContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
-        self.quit_action.triggered.connect(self.close)
+        self.quit_action.triggered.connect(self.request_exit)
         self.addAction(self.quit_action)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.quit_action)
@@ -286,6 +286,9 @@ class KilnWindow(gui.OvenWindow):
         if terminal and view.cooldown_s is not None and "cooldown" not in self._markers_run:
             self._show_event_marker(view.elapsed_s, f"Cooldown {view.cooldown_s:.0f} s", "#63a8e8", samples)
             self._markers_run.add("cooldown")
+        self.show_hold_window(gui.hold_window_span(
+            view.state, view.hold_reached_s, getattr(view, "hold_elapsed_s", 0.0), view.elapsed_s,
+        ))
         if terminal and "final_fit" not in self._markers_run:
             self.fit_graph_to_data()
             self._markers_run.add("final_fit")
@@ -492,6 +495,32 @@ class KilnWindow(gui.OvenWindow):
             painter.drawEllipse(QtCore.QPointF(20, 4), 4.0, 4.0)
             painter.end()
         self.event_log_action.setIcon(QtGui.QIcon(pixmap))
+
+    def request_exit(self):
+        """Exit at once when idle; during a run, ask before stopping it."""
+        view, _samples = self.service.snapshot()
+        if view.running and not self._confirm_exit_during_run():
+            return
+        self.close()
+
+    def _confirm_exit_during_run(self):
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle("Exit during a run")
+        box.setText("A run is in progress.")
+        box.setInformativeText(
+            "Exiting stops the run and turns the heater off. The data recorded so far is saved."
+        )
+        exit_button = box.addButton("Stop run and exit", QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+        keep_button = box.addButton("Keep running", QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        exit_button.setStyleSheet(
+            "QPushButton { background: #b8423a; border-color: #c6413a; color: white; font-weight: 600; }"
+            "QPushButton:hover { background: #c6413a; }"
+        )
+        box.setDefaultButton(keep_button)
+        box.setEscapeButton(keep_button)
+        box.exec()
+        return box.clickedButton() is exit_button
 
     def closeEvent(self, event):
         self._timer.stop()

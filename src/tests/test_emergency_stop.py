@@ -317,7 +317,7 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.assertIn("EMERGENCY STOP", self.window.estop_banner.text())
         self.assertTrue(self.window.centralWidget().property("emergencyStop"))
         enabled = [action for action in self.window.process_toolbar.actions() if action.isEnabled()]
-        self.assertEqual(enabled, [self.window.event_log_action])
+        self.assertEqual(enabled, [self.window.event_log_action, self.window.window_control_action])
         self.assertTrue(self.window.controls_box.isEnabled())
         self.assertTrue(self.window.pid_toggle.isEnabled())
         self.assertFalse(self.window.hold_input.isEnabled())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +27,141 @@ GRAPH_EXPANSION_FACTOR = 1.25
 GRAPH_AXIS_DIVISIONS = 5
 GRAPH_MIN_TIME_RANGE_S = 0.5
 FONT_ASSET_DIRECTORY = Path(__file__).resolve().parent / "assets" / "fonts"
+FINISHED_RUN_STATES = frozenset({"complete", "aborted", "fault", "e_stop"})
+
+
+def hold_window_span(
+    state: str,
+    hold_reached_s: float | None,
+    hold_elapsed_s: float | None,
+    elapsed_s: float,
+) -> tuple[float, float] | None:
+    """Return the hold stage's measured (start, end) time, or None while it is unknown.
+
+    The hold only has a known position once the run has finished; before that,
+    the time needed to reach the target cannot be predicted.
+    """
+    if state not in FINISHED_RUN_STATES or hold_reached_s is None:
+        return None
+    held_s = hold_elapsed_s or 0.0
+    # A fault or E-Stop during the hold ends it at the run's end without recording a duration.
+    end_s = hold_reached_s + held_s if held_s > 0.0 else elapsed_s
+    if end_s <= hold_reached_s:
+        return None
+    return hold_reached_s, end_s
+
+
+def minimize_available(platform: str, environ: dict[str, str], override: bool | None = None) -> bool:
+    """True when a minimised window can be restored without a keyboard.
+
+    A Pi without a desktop session (kiosk start) has no taskbar to bring the
+    window back, so the minimise button is offered only with a desktop.
+    """
+    if override is not None:
+        return override
+    if not platform.startswith("linux"):
+        return True
+    return bool(environ.get("XDG_CURRENT_DESKTOP") or environ.get("DESKTOP_SESSION"))
+
+
+class WindowControlButton(QtWidgets.QAbstractButton):
+    """Round, custom-painted minimise or exit button for the fullscreen toolbar."""
+
+    SIZE = 38
+
+    def __init__(self, kind: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        if kind not in ("minimize", "close"):
+            raise ValueError(f"Unknown window control: {kind}")
+        self.kind = kind
+        self._hover = 0.0
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.TabFocus)
+        self.setAccessibleName("Minimise" if kind == "minimize" else "Exit")
+        self.setToolTip("Minimise window" if kind == "minimize" else "Exit the oven controller")
+        self._animation = QtCore.QVariantAnimation(self)
+        self._animation.setDuration(140)
+        self._animation.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._set_hover)
+
+    def _set_hover(self, value: float) -> None:
+        self._hover = float(value)
+        self.update()
+
+    def _animate_hover(self, target: float) -> None:
+        self._animation.stop()
+        self._animation.setStartValue(self._hover)
+        self._animation.setEndValue(target)
+        self._animation.start()
+
+    def enterEvent(self, event: QtCore.QEvent) -> None:
+        self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    def sizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(self.SIZE, self.SIZE)
+
+    @staticmethod
+    def _mix(start: QtGui.QColor, end: QtGui.QColor, amount: float) -> QtGui.QColor:
+        return QtGui.QColor(
+            round(start.red() + (end.red() - start.red()) * amount),
+            round(start.green() + (end.green() - start.green()) * amount),
+            round(start.blue() + (end.blue() - start.blue()) * amount),
+            round(start.alpha() + (end.alpha() - start.alpha()) * amount),
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        del event
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        closing = self.kind == "close"
+        hover = self._hover if self.isEnabled() else 0.0
+        pressed = self.isDown()
+        # Border and neutral fills match the toolbar's QToolButton stylesheet in each state.
+        idle_fill, idle_border = QtGui.QColor("#1f2329"), QtGui.QColor("#2e333b")
+        hover_border, pressed_border = QtGui.QColor("#9aa1ab"), QtGui.QColor("#454c57")
+        if closing:
+            hover_fill, pressed_fill = QtGui.QColor("#c6413a"), QtGui.QColor("#9e2f2a")
+        else:
+            hover_fill, pressed_fill = QtGui.QColor("#262b32"), QtGui.QColor("#2e333b")
+        fill = pressed_fill if pressed else self._mix(idle_fill, hover_fill, hover)
+        border = pressed_border if pressed else self._mix(idle_border, hover_border, hover)
+        # A 1 px pen centred half a pixel in puts the border on the outermost pixels, as on the other buttons.
+        bounds = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if self.hasFocus():
+            painter.setPen(QtGui.QPen(QtGui.QColor("#8fc5f5"), 2.0))
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QtCore.QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0))
+            bounds = bounds.adjusted(2.5, 2.5, -2.5, -2.5)
+        painter.setPen(QtGui.QPen(border, 1.0))
+        painter.setBrush(fill)
+        painter.drawEllipse(bounds)
+
+        idle_glyph = QtGui.QColor("#ff8a80" if closing else "#c3c8cf")
+        glyph = self._mix(idle_glyph, QtGui.QColor("#ffffff"), hover)
+        if not self.isEnabled():
+            glyph = QtGui.QColor("#5b616b")
+        pen = QtGui.QPen(glyph, 1.8)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        center = bounds.center()
+        offset = 1.0 if pressed else 0.0
+        if closing:
+            arm = 5.0
+            painter.drawLine(QtCore.QPointF(center.x() - arm, center.y() - arm + offset),
+                             QtCore.QPointF(center.x() + arm, center.y() + arm + offset))
+            painter.drawLine(QtCore.QPointF(center.x() + arm, center.y() - arm + offset),
+                             QtCore.QPointF(center.x() - arm, center.y() + arm + offset))
+        else:
+            half = 6.0
+            painter.drawLine(QtCore.QPointF(center.x() - half, center.y() + offset),
+                             QtCore.QPointF(center.x() + half, center.y() + offset))
+        painter.end()
 
 
 def _load_ui_fonts() -> None:
@@ -813,6 +949,28 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.manual_button.setToolTip("Open door, close door, test the buzzer, or control the heater")
         toolbar.addWidget(self.manual_button)
 
+        # Fullscreen has no title bar, so the window controls sit at the toolbar's right edge.
+        spacer = QtWidgets.QWidget(self)
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        # No stylesheet here: tooltips take their look from the widget that shows them,
+        # so a local style would make these differ from the other toolbar tooltips.
+        window_controls = QtWidgets.QWidget(self)
+        controls_layout = QtWidgets.QHBoxLayout(window_controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(10)
+        self.minimize_button = WindowControlButton("minimize", window_controls)
+        self.minimize_button.clicked.connect(lambda: self.showMinimized())
+        self.minimize_button.setVisible(minimize_available(
+            sys.platform, dict(os.environ), getattr(config, "SHOW_MINIMIZE_BUTTON", None),
+        ))
+        self.exit_button = WindowControlButton("close", window_controls)
+        self.exit_button.clicked.connect(self.request_exit)
+        controls_layout.addWidget(self.minimize_button)
+        controls_layout.addWidget(self.exit_button)
+        # Exiting is always safe (shutdown turns the heater off), so the E-Stop lock skips these.
+        self.window_control_action = toolbar.addWidget(window_controls)
+
     @staticmethod
     def _toolbar_icon(symbol: str, accent: str) -> QtGui.QIcon:
         pixmap = QtGui.QPixmap(24, 24)
@@ -1021,6 +1179,7 @@ class OvenWindow(QtWidgets.QMainWindow):
                                                 pen=pg.mkPen(None))
         self.graph_item.addItem(self.hold_region, ignoreBounds=True)
         self.hold_region.setZValue(-10)
+        self.hold_region.setVisible(False)
         self.duty_curve = pg.PlotCurveItem(pen=pg.mkPen("#5aa9e6", width=3))
         self.duty_view.addItem(self.duty_curve)
 
@@ -1055,6 +1214,9 @@ class OvenWindow(QtWidgets.QMainWindow):
             item_layout.addWidget(marker, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
             item_layout.addWidget(label)
             legend_row.addWidget(legend_item)
+            if marker_kind == "hold":
+                self.hold_legend_item = legend_item
+                legend_item.setVisible(False)
         legend_row.addStretch(1)
         graph_column.addLayout(legend_row)
         graph_column.addWidget(self.graph, 1)
@@ -1278,16 +1440,24 @@ class OvenWindow(QtWidgets.QMainWindow):
     def _update_profile_preview(self, *_args) -> None:
         """Keep the idle target line flat across the visible time axis."""
         target = self.target_input.value()
-        hold_s = self.hold_input.value()
-        warmup_s = 30.0
         goal_x, _goal_y = self.goal_curve.getData()
         if goal_x is None or len(goal_x) == 0:
             x_min, x_max = self.graph_item.vb.viewRange()[0]
             self.planned_curve.setData([x_min, x_max], [target, target])
         else:
             self.planned_curve.setData([], [])
-        self.hold_region.setRegion((warmup_s, warmup_s + hold_s))
         self.target_status_label.setText(f"target {target:.1f} °C")
+
+    def show_hold_window(self, span: tuple[float, float] | None) -> None:
+        """Shade the measured hold stage, or hide the shading and its legend entry."""
+        if span is not None:
+            self.hold_region.setRegion(span)
+        self.hold_region.setVisible(span is not None)
+        self.hold_legend_item.setVisible(span is not None)
+
+    def request_exit(self) -> None:
+        """Close the window; the controller adapter asks first during a run."""
+        self.close()
 
     @staticmethod
     def _spin(minimum: float, maximum: float, value: float, suffix: str = "", decimals: int = 3, step: float | None = None) -> QtWidgets.QDoubleSpinBox:
@@ -1588,8 +1758,9 @@ class OvenWindow(QtWidgets.QMainWindow):
             self._pre_emergency_enabled = {action: action.isEnabled() for action in actions}
         if active:
             for action in actions:
-                # The event log is read-only, so it stays available for diagnosis.
-                action.setEnabled(action is self.event_log_action)
+                # The event log is read-only, so it stays available for diagnosis;
+                # minimise and exit stay too, since shutdown leaves the outputs off.
+                action.setEnabled(action in (self.event_log_action, self.window_control_action))
             for control in (
                 self.target_input, self.hold_input,
                 self.kp_enable, self.ki_enable, self.kd_enable,
