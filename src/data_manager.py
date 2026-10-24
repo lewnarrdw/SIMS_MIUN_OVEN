@@ -8,11 +8,18 @@ from pathlib import Path
 
 
 class DataManager:
+    """Store kiln runs and settings in portable files."""
+
     RUN_VERSION = 1
     SAMPLE_FIELDS = (
         "elapsed_s", "temperature_c", "target_temperature_c",
         "heater_output_percent", "kp", "ki", "kd",
     )
+    RUN_METADATA_FIELDS = (
+        "schema_version", "started_at", "settings", "result", "progress",
+        "events", "metrics",
+    )
+    RUN_CSV_FIELDS = tuple(f"{key}_json" for key in RUN_METADATA_FIELDS) + SAMPLE_FIELDS
     SETTING_FIELDS = ("target_temperature_c", "hold_duration_s", "kp", "ki", "kd")
 
     def __init__(self, directory):
@@ -20,7 +27,7 @@ class DataManager:
 
     @classmethod
     def build_run_record(cls, view, samples):
-        stopped = view.state in ("paused", "aborted")
+        stopped = view.state == "aborted"
         progress = {"stage": view.stop_stage if stopped and view.stop_stage is not None else view.stage,
             "fraction": view.stop_fraction if stopped and view.stop_fraction is not None else view.fraction,
             "detail": view.stop_detail if stopped and view.stop_detail is not None else view.detail}
@@ -45,18 +52,62 @@ class DataManager:
     def export_run(self, record, path=None):
         if path is None:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            path = self.directory / f"kiln-run-{stamp}.json"
-        path = Path(path).with_suffix(".json")
+            path = self.directory / f"kiln-run-{stamp}.csv"
+        path = Path(path).with_suffix(".csv")
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as stream:
-            json.dump(record, stream, indent=2, allow_nan=False)
-            stream.write("\n")
+        # Repeat run metadata on every sample row so each CSV row stays self-contained.
+        metadata = {
+            f"{key}_json": json.dumps(record.get(key), allow_nan=False)
+            for key in self.RUN_METADATA_FIELDS
+        }
+        samples = record.get("samples", [])
+        with path.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=self.RUN_CSV_FIELDS)
+            writer.writeheader()
+            # Keep metadata even for runs that have no recorded samples.
+            for sample in samples or [{}]:
+                writer.writerow({
+                    **metadata,
+                    **{key: sample.get(key, "") for key in self.SAMPLE_FIELDS},
+                })
         return path
 
     @classmethod
     def import_run(cls, path):
-        with Path(path).open(encoding="utf-8-sig") as stream:
-            record = json.load(stream)
+        path = Path(path)
+        if path.suffix.lower() == ".csv":
+            with path.open(newline="", encoding="utf-8-sig") as stream:
+                reader = csv.DictReader(stream)
+                if reader.fieldnames is None or any(
+                    field not in reader.fieldnames for field in cls.RUN_CSV_FIELDS
+                ):
+                    raise ValueError("Run CSV is missing required columns")
+                rows = list(reader)
+            if not rows:
+                raise ValueError("Run CSV must contain at least one row")
+            # Metadata is duplicated during export, so reject files where rows disagree.
+            metadata = {
+                field: rows[0][f"{field}_json"]
+                for field in cls.RUN_METADATA_FIELDS
+            }
+            if any(
+                row[f"{field}_json"] != value
+                for row in rows
+                for field, value in metadata.items()
+            ):
+                raise ValueError("Run CSV metadata must be identical on every row")
+            try:
+                record = {field: json.loads(value) for field, value in metadata.items()}
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("Run CSV contains invalid metadata") from exc
+            record["samples"] = [
+                {key: row[key] for key in cls.SAMPLE_FIELDS}
+                for row in rows
+                if any(row[key] != "" for key in cls.SAMPLE_FIELDS)
+            ]
+        else:
+            with path.open(encoding="utf-8-sig") as stream:
+                record = json.load(stream)
         if not isinstance(record, dict) or record.get("schema_version") != cls.RUN_VERSION:
             raise ValueError("Unsupported or invalid kiln run file")
         settings = record.get("settings")
@@ -82,12 +133,13 @@ class DataManager:
                 raise ValueError("Run file contains invalid outcome details")
             if not 0 <= progress["stage"] <= 4 or not 0.0 <= progress["fraction"] <= 1.0:
                 raise ValueError("Run file contains invalid progress values")
-            if result.get("state") not in {"complete", "paused", "aborted", "fault", "e_stop"}:
+            if result.get("state") not in {"complete", "aborted", "fault", "e_stop"}:
                 raise ValueError("Run file contains an invalid terminal state")
             previous_elapsed = -1.0
             for sample in samples:
                 for key in cls.SAMPLE_FIELDS:
                     sample[key] = cls._number(sample[key], key)
+                # Samples must remain in time order for plotting and run review.
                 if sample["elapsed_s"] < previous_elapsed or sample["elapsed_s"] < 0:
                     raise ValueError("Run samples must have increasing elapsed times")
                 previous_elapsed = sample["elapsed_s"]
@@ -108,6 +160,7 @@ class DataManager:
                         or not isinstance(event.get("description"), str)):
                     raise ValueError("Run file contains an invalid event")
                 event["elapsed_s"] = cls._number(event["elapsed_s"], "event elapsed time")
+                # Event order is checked independently from sample order.
                 if event["elapsed_s"] < previous_event_time or event["elapsed_s"] < 0:
                     raise ValueError("Run events must be in chronological order")
                 previous_event_time = event["elapsed_s"]
