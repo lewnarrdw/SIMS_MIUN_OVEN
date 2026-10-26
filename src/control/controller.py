@@ -118,6 +118,21 @@ class Controller:
         self.hw.heater.off(); self.hw.motor.stop()
         self.fault_reason = reason
         self._set_state(State.E_STOP, "Emergency stop")
+    def reset(self):
+        """Clear the finished run and return to Ready; the caller checks that it is safe."""
+        if self.active: raise RuntimeError("Stop or finish the active run before resetting")
+        self.hw.heater.off(); self.hw.heater.unlock(); self.hw.motor.clear_fault()
+        self.fault_reason = ""; self.run_started = None; self.run_ended = None
+        self.hold_completed = False; self.completion_allowed = True
+        # Forget the finished run's results so its markers and stages cannot reappear.
+        self.hold_reached_s = self.cooling_started = self.cooldown_s = None
+        self.hold_elapsed_s = 0.0
+        self.stop_state = self.stop_elapsed_s = self.stop_stage = None
+        self.stop_fraction = self.stop_detail = None
+        self.peak_temp = self.peak_time = self.hold_min = self.hold_min_time = None
+        self.progress_fraction, self.progress_detail = 0.0, ""
+        self.stability.reset()
+        self._set_state(State.READY, "Ready to run")
     def release_emergency_stop(self):
         """Clear only the E-Stop latch after the physical circuit is released."""
         self._clear_safety_latch(State.E_STOP)

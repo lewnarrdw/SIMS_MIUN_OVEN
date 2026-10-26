@@ -3,7 +3,6 @@ from __future__ import annotations
 import signal
 import sys
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from PySide6 import QtCore, QtGui, QtWidgets
 import config
@@ -11,6 +10,8 @@ import gui
 from application import LATCHED_FAULTS, Application, describe_fault
 from data_manager import DataManager
 from event_log import EventLogDialog, event_severity
+from run_summary import attach_summary, record_summary
+from run_summary_dialog import RunSummaryDialog
 
 
 class KilnWindow(gui.OvenWindow):
@@ -27,7 +28,11 @@ class KilnWindow(gui.OvenWindow):
         self._seen_attention = set()
         self._active_startup_reason = None
         self._live_run_started_at = None
-        self._stage_detail_shows_fault = False
+        self._stage_detail_color = None
+        self._last_run_stage = None  # Stage a live run was in, to mark where a fault ended it
+        self._resets_sent = 0
+        self._summary_dialog = None
+        self._summary_opened_for = None  # run_started_at of the run whose summary opened by itself
         super().__init__()
         self._event_log_base_icon = self.event_log_action.icon()
         self._live_graph_x_max = gui.GRAPH_WINDOW_S
@@ -79,15 +84,24 @@ class KilnWindow(gui.OvenWindow):
     def stop_process(self):
         self.service.command("stop")
 
+    def reset_process(self):
+        self._historical_record = None
+        self._clear_temperature_markers()
+        self._markers_run.clear()
+        # Until the worker has handled this reset, snapshots still show the old run.
+        self._resets_sent += 1
+        self.service.command("reset")
+
     def manual_command(self, name):
         self.service.command(name)
 
     def _update_toolbar_actions(self, view):
-        """Dim Run, Stop and Manual controls when the worker would refuse them."""
+        """Dim Run, Stop, Reset and Manual controls when the worker would refuse them."""
         if self._emergency_stop_shown is not None:
             return  # The E-Stop lock owns the toolbar until it is released.
         heater_on = (getattr(view, "output_percent", 0.0) or 0.0) > 0.0
         self.run_action.setEnabled(not view.running)
+        self.reset_action.setEnabled(not view.running)
         # Outside a run, Stop still turns off manual heating.
         self.stop_action.setEnabled(view.running or heater_on)
         self.manual_controls_action.setEnabled(not view.running)
@@ -114,6 +128,7 @@ class KilnWindow(gui.OvenWindow):
         self._last_run_record = None
         self._clear_temperature_markers()
         self._markers_run.clear()
+        self._last_run_stage = None
         hold_duration_s = (view.run_settings or {}).get("hold_duration_s", self.hold_input.value())
         self._live_graph_x_max = max(
             gui.GRAPH_WINDOW_S,
@@ -139,8 +154,10 @@ class KilnWindow(gui.OvenWindow):
             self._historical_record = None
             self._clear_temperature_markers()
             self._markers_run.clear()
+        # A snapshot taken before the worker handled a reset still shows the old run.
+        reset_pending = self._resets_sent > getattr(live_view, "resets_handled", self._resets_sent)
         if self._historical_record is None:
-            view, samples = live_view, live_samples
+            view, samples = live_view, (() if reset_pending else live_samples)
         else:
             record = self._historical_record
             result, metrics, progress = record["result"], record["metrics"], record["progress"]
@@ -161,6 +178,9 @@ class KilnWindow(gui.OvenWindow):
                 error=result.get("reason", ""), events=tuple(record.get("events", ())),
             )
             samples = record["samples"]
+        # A summary needs run data: the live run's samples or an imported run. The summary
+        # stays usable during an E-Stop, so this overrides the lock as it is read-only.
+        self.summary_action.setEnabled(bool(samples))
         time_extent_s = max(view.elapsed_s, samples[-1]["elapsed_s"] if samples else 0.0)
         if samples and self._historical_record is None:
             if time_extent_s >= self._live_graph_x_max * gui.GRAPH_EXPANSION_TRIGGER:
@@ -198,14 +218,9 @@ class KilnWindow(gui.OvenWindow):
         can_start = getattr(live_view, "can_start", True)
         self.run_action.setToolTip("Start a new run" if can_start else
                                    f"Cannot start: {getattr(live_view, 'ready_reason', 'process is busy')}")
-        progress_stage = {"ready": 0, "heating": 1, "holding": 2, "cooling": 3,
-                          "complete": 4}.get(state, -1)
-        if state == "aborted":
-            progress_stage = max(1, min(3, getattr(view, "stop_stage", None) or 1))
-        if state == "aborted" and getattr(view, "stop_state", None) == "door_moving":
-            progress_stage = -1
-        self.progress.set_progress(progress_stage, view.fraction, view.detail)
-        titles = {"ready": "Ready to run", "door_moving": "Closing door", "heating": "Heating",
+        self._show_stage_progress(view, can_start)
+        titles = {"ready": "Ready to run" if can_start else "Not ready",
+                  "door_moving": "Closing door", "heating": "Heating",
                   "holding": "Holding", "cooling": "Cooling down",
                   "complete": "Complete", "aborted": "Stopped", "fault": "Fault", "e_stop": "Emergency stop"}
         opening_door = (state == "cooling" and
@@ -238,15 +253,18 @@ class KilnWindow(gui.OvenWindow):
             elif state == "holding" and stage_samples:
                 errors = [abs(row["temperature_c"] - row["target_temperature_c"]) for row in stage_samples]
                 stage_detail = f"Average error: {sum(errors) / len(errors):.2f} °C"
-        show_fault = state == "fault" and bool(view.detail)
-        if show_fault:
+        # Red for a fault, amber for what blocks a start, grey for running details.
+        detail_color = "#9aa1ab"
+        if state == "fault" and view.detail:
             next_step = "Fix it, then start a new run." if view.detail in LATCHED_FAULTS else "Fix it to continue."
             stage_detail = f"Cause: {describe_fault(view.detail)}. {next_step}"
-        if show_fault != self._stage_detail_shows_fault:
-            self._stage_detail_shows_fault = show_fault
-            self.stage_detail_label.setStyleSheet(
-                f"color: {'#ff8a80' if show_fault else '#9aa1ab'}; font-size: 9pt;"
-            )
+            detail_color = "#ff8a80"
+        elif state == "ready" and not can_start and self._historical_record is None:
+            stage_detail = f"Cannot start: {getattr(live_view, 'ready_reason', 'process is busy')}"
+            detail_color = "#e8b33d"
+        if detail_color != self._stage_detail_color:
+            self._stage_detail_color = detail_color
+            self.stage_detail_label.setStyleSheet(f"color: {detail_color}; font-size: 9pt;")
         self.stage_detail_label.setText(stage_detail)
 
         minutes, seconds = divmod(view.elapsed_s, 60.0)
@@ -273,25 +291,38 @@ class KilnWindow(gui.OvenWindow):
             self.statusBar().showMessage(view.error, 8000)
         self._update_attention_badge(view)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
-        if view.state == "complete" and "peak_error" not in self._markers_run:
-            error = gui.peak_error(
-                view.target_c,
-                None if view.peak_c is None else (view.peak_time_s, view.peak_c),
-                None if view.hold_min_c is None else (view.hold_min_time_s, view.hold_min_c),
-            )
-            if error is not None:
-                self.show_peak_error_marker(*error, view.target_c)
-            self._markers_run.add("peak_error")
-        if view.hold_reached_s is not None and "hold_reached" not in self._markers_run:
-            self._show_event_marker(view.hold_reached_s, "Hold reached", "#8fc5f5", samples)
-            self._markers_run.add("hold_reached")
-        if view.state == "aborted" and view.stop_elapsed_s is not None and "stopped" not in self._markers_run:
-            stopped_during = (view.stop_state or "run").replace("_", " ").title()
-            self._show_event_marker(view.stop_elapsed_s, f"Stopped during {stopped_during}", "#d45b52", samples)
-            self._markers_run.add("stopped")
-        if terminal and view.cooldown_s is not None and "cooldown" not in self._markers_run:
-            self._show_event_marker(view.elapsed_s, f"Cooldown {view.cooldown_s:.0f} s", "#63a8e8", samples)
-            self._markers_run.add("cooldown")
+        if not (reset_pending and self._historical_record is None):
+            if view.state == "complete" and "peak_error" not in self._markers_run:
+                error = gui.peak_error(
+                    view.target_c,
+                    None if view.peak_c is None else (view.peak_time_s, view.peak_c),
+                    None if view.hold_min_c is None else (view.hold_min_time_s, view.hold_min_c),
+                )
+                if error is not None:
+                    self.show_peak_error_marker(*error, view.target_c)
+                self._markers_run.add("peak_error")
+            if view.hold_reached_s is not None and "hold_reached" not in self._markers_run:
+                self._show_event_marker(view.hold_reached_s, f"Hold started at {gui.format_duration(view.hold_reached_s)}",
+                                        gui.MARKER_COLORS["hold"], samples)
+                self._markers_run.add("hold_reached")
+            if view.state == "aborted" and view.stop_elapsed_s is not None and "stopped" not in self._markers_run:
+                stopped_during = (view.stop_state or "run").replace("_", " ").title()
+                self._show_event_marker(view.stop_elapsed_s,
+                                        f"Stopped during {stopped_during} at {gui.format_duration(view.stop_elapsed_s)}",
+                                        gui.MARKER_COLORS["stopped"], samples)
+                self._markers_run.add("stopped")
+            if terminal and view.cooldown_s is not None and "cooldown" not in self._markers_run:
+                # The run ends when the door opens after cooling; the bracket is the cool-down time.
+                self._show_event_marker(view.elapsed_s, f"Cooled down at {gui.format_duration(view.elapsed_s)}"
+                                        f" ({view.cooldown_s:.0f} s)", gui.MARKER_COLORS["cooled"], samples)
+                self._markers_run.add("cooldown")
+        # Open the summary by itself once a live run completes or is stopped. Faults and
+        # E-Stops leave it to the operator, so it cannot cover what needs attention.
+        finished = (self._historical_record is None and samples
+                    and view.state in ("complete", "aborted") and view.run_started_at)
+        if finished and view.run_started_at != self._summary_opened_for:
+            self._summary_opened_for = view.run_started_at
+            self.show_run_summary()
         self.show_hold_window(gui.hold_window_span(
             view.state, view.hold_reached_s, getattr(view, "hold_elapsed_s", 0.0), view.elapsed_s,
         ))
@@ -299,14 +330,49 @@ class KilnWindow(gui.OvenWindow):
             self.fit_graph_to_data()
             self._markers_run.add("final_fit")
 
+    def _show_stage_progress(self, view, can_start):
+        """Map the process state onto the stage indicator."""
+        run_stages = {"door_moving": 1, "heating": 1, "holding": 2, "cooling": 3}
+        state = view.state
+        live = self._historical_record is None
+        if live and state in run_stages:
+            self._last_run_stage = run_stages[state]
+        elif live and state in ("ready", "complete"):
+            self._last_run_stage = None
+        if state in run_stages:
+            self.progress.set_progress(run_stages[state], view.fraction, view.detail)
+        elif state == "complete":
+            self.progress.set_progress(len(self.progress.stages), active=False)
+        elif state == "aborted":
+            stopped = (1 if getattr(view, "stop_state", None) == "door_moving"
+                       else max(1, min(3, getattr(view, "stop_stage", None) or 1)))
+            self.progress.set_progress(stopped, active=False, failed_stage=stopped)
+        elif state in ("fault", "e_stop"):
+            # Mark the stage the run was in; with no run, the fault blocks Ready itself.
+            failed = (self._last_run_stage if live else getattr(view, "stage", 0)) or 0
+            self.progress.set_progress(failed, active=False, failed_stage=failed)
+        else:
+            # Ready is complete once a run may start; until then it waits, unchecked.
+            self.progress.set_progress(1 if can_start else 0, active=False)
+
     def _show_event_marker(self, elapsed_s, label, color, samples):
         if not samples:
             return
         nearest = min(samples, key=lambda row: abs(row["elapsed_s"] - elapsed_s))
         self._add_temperature_marker(elapsed_s, nearest["temperature_c"], label, color)
 
+    def _in_data_folder(self, filename=""):
+        """Start file dialogs in the data folder, where the oven saves its runs."""
+        folder = self.data.directory.resolve()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return filename  # Fall back to the dialog's own default location.
+        return str(folder / filename)
+
     def import_settings(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import settings", "", "CSV files (*.csv)")
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import settings", self._in_data_folder(),
+                                                        "CSV files (*.csv)")
         if not path:
             return
         try:
@@ -327,10 +393,11 @@ class KilnWindow(gui.OvenWindow):
             if view.running or view.state not in ("complete", "aborted", "fault", "e_stop"):
                 self.statusBar().showMessage("A run can be exported after it ends", 5000)
                 return
-            record = self.service.last_run_record or DataManager.build_run_record(view, samples)
+            record = self.service.last_run_record or attach_summary(
+                DataManager.build_run_record(view, samples), config.STABLE_TOLERANCE)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export run",
-            f"kiln-run-{stamp}.json", "Kiln run (*.json)")
+            self._in_data_folder(f"kiln-run-{stamp}.json"), "Kiln run (*.json)")
         if path:
             try:
                 saved = self.data.export_run(record, path)
@@ -343,9 +410,8 @@ class KilnWindow(gui.OvenWindow):
         if view.running:
             self.statusBar().showMessage("Stop the active run before importing a run", 5000)
             return
-        sample_path = Path(__file__).with_name("sample_completed_run.json")
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Import run", str(sample_path), "Kiln run (*.json)"
+            self, "Import run", self._in_data_folder(), "Kiln run (*.json)"
         )
         if not path:
             return
@@ -368,7 +434,9 @@ class KilnWindow(gui.OvenWindow):
             raise ValueError("Run target is outside the configured temperature limits")
         if not config.HOLD_DURATION_MIN_S <= settings["hold_duration_s"] <= config.HOLD_DURATION_MAX_S:
             raise ValueError("Run hold duration is outside the configured limits")
-        if any(not 0.0 <= settings[key] <= 10.0 for key in ("kp", "ki", "kd")):
+        # The same limits as the PID inputs, so any gains the GUI can run can be imported.
+        limits = {"kp": gui.MAX_KP, "ki": gui.MAX_KI, "kd": gui.MAX_KD}
+        if any(not 0.0 <= settings[key] <= limit for key, limit in limits.items()):
             raise ValueError("Run PID gains are outside the supported range")
 
     def _apply_settings(self, settings):
@@ -396,7 +464,7 @@ class KilnWindow(gui.OvenWindow):
     def export_settings(self):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export settings",
-            f"kiln-settings-{stamp}.csv", "CSV files (*.csv)")
+            self._in_data_folder(f"kiln-settings-{stamp}.csv"), "CSV files (*.csv)")
         if path:
             try:
                 DataManager.export_settings(self._settings(), path)
@@ -433,6 +501,33 @@ class KilnWindow(gui.OvenWindow):
         # Events that arrived while the log was open have been seen.
         self._unread_attention.clear()
         self._refresh_event_log_icon()
+
+    def _summary_record(self):
+        """The shown run's record, preferring the copy saved with its summary."""
+        if self._historical_record is not None:
+            return self._historical_record, False
+        view, samples = self.service.snapshot()
+        if not samples:
+            return None, view.running
+        saved = self.service.last_run_record
+        if not view.running and saved is not None and saved.get("started_at") == view.run_started_at:
+            return saved, False
+        return attach_summary(DataManager.build_run_record(view, samples), config.STABLE_TOLERANCE), view.running
+
+    def show_run_summary(self):
+        """Open the summary beside the window, so the live display keeps running."""
+        record, live = self._summary_record()
+        if self._summary_dialog is not None:
+            self._summary_dialog.close()
+        dialog = RunSummaryDialog(record_summary(record, config.STABLE_TOLERANCE), live, parent=self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.finished.connect(lambda _result, closed=dialog: self._forget_summary_dialog(closed))
+        self._summary_dialog = dialog
+        dialog.show()
+
+    def _forget_summary_dialog(self, dialog):
+        if self._summary_dialog is dialog:
+            self._summary_dialog = None
 
     def _update_attention_badge(self, view):
         def add_attention(key, severity, description, elapsed_s=0.0, event_type="attention"):

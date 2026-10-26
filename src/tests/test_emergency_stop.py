@@ -313,6 +313,7 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.assertIn("EMERGENCY STOP", self.window.estop_banner.text())
         self.assertTrue(self.window.centralWidget().property("emergencyStop"))
         enabled = [action for action in self.window.process_toolbar.actions() if action.isEnabled()]
+        # The run summary would stay available too, but this view has no run data to summarise.
         self.assertEqual(enabled, [self.window.event_log_action, self.window.window_control_action])
         self.assertTrue(self.window.controls_box.isEnabled())
         self.assertTrue(self.window.pid_toggle.isEnabled())
@@ -335,9 +336,9 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.set_view(state="ready", estop_active=False)
 
         self.assertTrue(self.window.estop_banner.isHidden())
-        # Stop stays dimmed in Ready: there is no run or manual heating to stop.
+        # Stop stays dimmed in Ready (nothing to stop), and so does the summary (no run data).
         self.assertEqual([action for action in self.window.process_toolbar.actions() if not action.isEnabled()],
-                         [self.window.stop_action])
+                         [self.window.stop_action, self.window.summary_action])
         self.assertTrue(self.window.controls_box.isEnabled())
 
     def test_cleared_estop_restores_controls(self) -> None:
@@ -376,7 +377,7 @@ class EmergencyStopWindowTests(unittest.TestCase):
 
     def test_fault_cause_clears_after_reset(self) -> None:
         self.set_view(state="fault", detail="door_error")
-        self.set_view(state="ready", detail="")
+        self.set_view(state="ready", detail="", can_start=True)
 
         self.assertEqual(self.window.stage_detail_label.text(), "")
         self.assertIn("#9aa1ab", self.window.stage_detail_label.styleSheet())

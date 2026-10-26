@@ -6,6 +6,8 @@ import math
 from datetime import datetime
 from pathlib import Path
 
+from run_summary import validate_summary
+
 
 class DataManager:
     RUN_VERSION = 1
@@ -111,6 +113,9 @@ class DataManager:
                 if event["elapsed_s"] < previous_event_time or event["elapsed_s"] < 0:
                     raise ValueError("Run events must be in chronological order")
                 previous_event_time = event["elapsed_s"]
+            # Runs saved before summaries were stored have none; it is computed when shown.
+            if "summary" in record:
+                validate_summary(record["summary"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Invalid kiln run file: {exc}") from exc
         return record

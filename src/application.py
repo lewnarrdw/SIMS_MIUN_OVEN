@@ -12,6 +12,7 @@ from hardware.actuators import light_test_steps
 from hardware.factory import create_hardware
 from data_manager import DataManager
 from pid_tuning_monitor import append_recommendation
+from run_summary import attach_summary
 
 @dataclass(frozen=True, slots=True)
 class ViewState:
@@ -48,10 +49,11 @@ class ViewState:
     estop_active: bool = False
     start_target_c: float | None = None  # Target the next run will use
     door_motor: str = "idle"  # idle, opening, closing or fault
+    resets_handled: int = 0  # Reset commands processed, accepted or not
 
 MAX_EVENTS = 1000
 COMMAND_LABELS = {
-    "start": "Start", "stop": "Stop", "open": "Open door",
+    "start": "Start", "stop": "Stop", "reset": "Reset", "open": "Open door",
     "close": "Close door", "heater_on": "Heater on", "heater_off": "Heater off",
     "test_buzzer": "Buzzer test", "defaults": "Restore defaults", "settings": "Settings",
     "tune": "PID tuning", "test_lights": "Light tower test",
@@ -104,6 +106,7 @@ class Application:
         # Event times count from the current run's start, or from startup before any run.
         self._event_base_monotonic = time.monotonic()
         self._run_clock_active = False
+        self._resets_handled = 0
         self._previous_run_outcome = None
         self._pending_pid_event = None
         self._append_event("app_started", "Application started")
@@ -176,7 +179,7 @@ class Application:
         wall_time = datetime.fromtimestamp(time.time() - (monotonic_now - moment)).astimezone()
         event = {"elapsed_s": round(self._event_elapsed(now), 3), "type": event_type,
                  "description": description, "time": wall_time.isoformat(timespec="milliseconds")}
-        # Run time is only meaningful from a run start onwards.
+        # Run time is only meaningful from a run start until the next reset.
         if self._run_clock_active:
             event["run_elapsed_s"] = event["elapsed_s"]
         event.update(details)
@@ -275,12 +278,13 @@ class Application:
                 can_start=not reason and allowed_state, ready_reason=ready_text,
                 estop_active=self._estop_active,
                 start_target_c=float(self._start_settings.get("target_temperature_c", self.controller.target)),
-                door_motor=self.hw.motor.state.value)
+                door_motor=self.hw.motor.state.value, resets_handled=self._resets_handled)
             self._view = view
             samples = tuple(self.samples)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
         if terminal and view.run_started_at and view.run_started_at != self._last_saved_run_started_at:
-            record = DataManager.build_run_record(view, samples)
+            # Saved with the run, so an imported run shows the summary seen when it ended.
+            record = attach_summary(DataManager.build_run_record(view, samples), self.config.STABLE_TOLERANCE)
             with self._lock:
                 self._last_saved_run_started_at = view.run_started_at
                 self._last_run_record = record
@@ -381,6 +385,27 @@ class Application:
                                           stopped_during=old_state.value)
                 elif name == "emergency":
                     self._enter_emergency_stop(now, value)
+                elif name == "reset":
+                    # Counted before any refusal so the GUI knows the command was handled.
+                    self._resets_handled += 1
+                    if self.controller.active:
+                        raise RuntimeError("Stop or finish the active run before resetting")
+                    if self.controller.state == State.E_STOP or self._estop_active:
+                        raise RuntimeError("Release the E-Stop; the oven recovers by itself")
+                    # Reset is optional: live faults clear themselves once fixed and Start
+                    # clears a latched one. Reset may clear a latched fault the same way.
+                    if (self.controller.state == State.FAULT
+                            and not self._only_latched_fault(temperature, age)):
+                        raise RuntimeError("The fault clears by itself once its cause is fixed")
+                    self._manual_override_active = False
+                    self.controller.reset()
+                    self._flush_pid_event()
+                    # Keep the log so the fault that led to the reset can still be read.
+                    self._run_clock_active = False
+                    with self._lock:
+                        self.samples.clear()
+                        self._error = ""
+                    self._append_event("reset", "Process reset", now)
                 elif name == "defaults":
                     if self.controller.active: raise RuntimeError("Settings cannot be imported during an active run")
                     self._start_settings = dict(value)

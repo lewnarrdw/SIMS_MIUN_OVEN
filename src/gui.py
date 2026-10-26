@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import config
+from run_summary import format_duration, format_error_c, peak_error  # noqa: F401  (main uses gui.peak_error)
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -22,6 +23,11 @@ MAX_KP = 200.0
 MAX_KI = 5.0
 MAX_KD = 2000.0
 MAX_DURATION_S = 120.0
+STATUS_BAR_HEIGHT = 26
+# End-of-run marker colours, each distinct from the blue heater output curve: yellow for
+# the peak error, the completed-stage green for the hold, cyan for cooling and the
+# stage cross's red for a stopped run.
+MARKER_COLORS = {"peak_error": "#ffe680", "hold": "#6fbf98", "cooled": "#5ed1d6", "stopped": "#e5534b"}
 MAX_TEMPERATURE_DISPLAY_C = 50.0
 MAX_OUTPUT_PERCENT = 100.0
 GRAPH_WINDOW_S = 120.0
@@ -55,30 +61,8 @@ def door_status(door: str | None, motor: str | None = "idle") -> tuple[str, str]
     }.get(door or "", ("N/A", DOOR_UNKNOWN_COLOR))
 
 
-def peak_error(
-    target_c: float,
-    peak: tuple[float, float] | None,
-    hold_low: tuple[float, float] | None,
-) -> tuple[float, float] | None:
-    """Return (elapsed_s, temperature_c) of the larger deviation from the target.
-
-    peak and hold_low are (elapsed_s, temperature_c): the run's highest temperature
-    and the lowest during the hold. A peak below the target or a low above it is not
-    a deviation in its direction, so it does not count.
-    """
-    candidates = []
-    if peak is not None and peak[1] >= target_c:
-        candidates.append(peak)
-    if hold_low is not None and hold_low[1] <= target_c:
-        candidates.append(hold_low)
-    if not candidates:
-        candidates = [point for point in (peak, hold_low) if point is not None]
-    return max(candidates, key=lambda point: abs(point[1] - target_c), default=None)
-
-
-def format_error_c(error_c: float) -> str:
-    """Signed error vs target, with a true minus sign below it."""
-    return f"{'−' if error_c < 0 else '+'}{abs(error_c):.2f} °C"
+def _point_xy(point: QtCore.QPointF) -> tuple[float, float]:
+    return point.x(), point.y()
 
 
 def hold_window_span(
@@ -253,23 +237,64 @@ def _load_ui_fonts() -> None:
 
 
 class StageProgress(QtWidgets.QWidget):
-    """A compact horizontal connected-node display for process stages."""
+    """A compact horizontal connected-node display for process stages.
+
+    Stages before current_stage show a green check. With active set, current_stage is
+    in progress: blue with a pulsing halo. failed_stage marks where a run ended early
+    with a red cross. A current_stage of len(stages) shows every stage complete.
+    """
 
     stages = ("Ready", "Heating", "Holding", "Cooling", "Done")
+    COMPLETED_COLOR = "#6fbf98"
+    ACTIVE_COLOR = "#7fb8ea"
+    FAILED_COLOR = "#e5534b"
+    PULSE_PERIOD_S = 1.6
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_stage = -1
+        self.active = False
+        self.failed_stage: int | None = None
         self.fraction = 0.0
         self.progress_detail = ""
+        self._pulse_clock = QtCore.QElapsedTimer()
+        self._pulse_clock.start()
+        self._pulse_timer = QtCore.QTimer(self)
+        self._pulse_timer.setInterval(50)
+        self._pulse_timer.timeout.connect(self.update)
         self.setMinimumWidth(260)
         self.setMinimumHeight(66)
 
-    def set_progress(self, current_stage: int, fraction: float = 0.0, detail: str = "") -> None:
-        self.current_stage = current_stage
+    def set_progress(
+        self,
+        current_stage: int,
+        fraction: float = 0.0,
+        detail: str = "",
+        active: bool = True,
+        failed_stage: int | None = None,
+    ) -> None:
+        state = (current_stage, active, failed_stage)
+        changed = state != (self.current_stage, self.active, self.failed_stage)
+        self.current_stage, self.active, self.failed_stage = state
         self.fraction = max(0.0, min(1.0, fraction))
         self.progress_detail = detail
-        self.update()
+        pulsing = self.active and failed_stage is None and 0 <= current_stage < len(self.stages)
+        if pulsing and not self._pulse_timer.isActive():
+            self._pulse_timer.start()
+        elif not pulsing:
+            self._pulse_timer.stop()
+        if changed:
+            self.update()
+
+    def stage_status(self, index: int) -> str:
+        """completed, active, failed or pending, as the node for index is drawn."""
+        if self.failed_stage is not None and index == self.failed_stage:
+            return "failed"
+        if index < self.current_stage:
+            return "completed"
+        if index == self.current_stage and self.active and self.failed_stage is None:
+            return "active"
+        return "pending"
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         del event
@@ -283,31 +308,40 @@ class StageProgress(QtWidgets.QWidget):
         positions = [QtCore.QPointF(left + index * spacing, center_y) for index in range(len(self.stages))]
         base_font = painter.font()
         base_font.setPointSize(9)
+        # A slow sine pulse on the halo shows the active stage is still running.
+        phase = (self._pulse_clock.elapsed() / 1000.0) / self.PULSE_PERIOD_S
+        halo_alpha = int(45 + 45 * (0.5 + 0.5 * math.sin(2 * math.pi * phase)))
+        mark_pen = QtGui.QPen(QtGui.QColor("#15171b"), 2.2)
+        mark_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        mark_pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
         for index, (stage, point) in enumerate(zip(self.stages, positions)):
-            completed = index < self.current_stage
-            active = index == self.current_stage
-            if active:
+            status = self.stage_status(index)
+            if status == "active":
+                halo = QtGui.QColor(self.ACTIVE_COLOR)
+                halo.setAlpha(halo_alpha)
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
-                painter.setBrush(QtGui.QColor(232, 179, 61, 56))
+                painter.setBrush(halo)
                 painter.drawEllipse(point, radius + 4, radius + 4)
-                fill, node_pen = QtGui.QColor("#e8b33d"), QtGui.QPen(QtGui.QColor("#e8b33d"), 2)
-            elif completed:
-                fill, node_pen = QtGui.QColor("#6fbf98"), QtGui.QPen(QtGui.QColor("#6fbf98"), 2)
-            else:
+            color = {"active": self.ACTIVE_COLOR, "completed": self.COMPLETED_COLOR,
+                     "failed": self.FAILED_COLOR}.get(status)
+            if color is None:
                 fill, node_pen = QtGui.QColor("#1c1f24"), QtGui.QPen(QtGui.QColor("#454c57"), 2)
+            else:
+                fill, node_pen = QtGui.QColor(color), QtGui.QPen(QtGui.QColor(color), 2)
             painter.setPen(node_pen)
             painter.setBrush(fill)
             painter.drawEllipse(point, radius, radius)
-            if completed:
-                check_pen = QtGui.QPen(QtGui.QColor("#15171b"), 2.2)
-                check_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
-                check_pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
-                painter.setPen(check_pen)
+            painter.setPen(mark_pen)
+            if status == "completed":
                 painter.drawLine(QtCore.QPointF(point.x() - 5, point.y()), QtCore.QPointF(point.x() - 1, point.y() + 4))
                 painter.drawLine(QtCore.QPointF(point.x() - 1, point.y() + 4), QtCore.QPointF(point.x() + 6, point.y() - 5))
-            painter.setPen(QtGui.QColor("#f2d48a" if active else "#c3c8cf" if completed else "#8b929c"))
+            elif status == "failed":
+                painter.drawLine(QtCore.QPointF(point.x() - 4, point.y() - 4), QtCore.QPointF(point.x() + 4, point.y() + 4))
+                painter.drawLine(QtCore.QPointF(point.x() + 4, point.y() - 4), QtCore.QPointF(point.x() - 4, point.y() + 4))
+            painter.setPen(QtGui.QColor({"active": "#bcdcf5", "completed": "#c3c8cf",
+                                         "failed": "#ff8a80"}.get(status, "#8b929c")))
             font = QtGui.QFont(base_font)
-            font.setBold(active or completed)
+            font.setBold(status != "pending")
             painter.setFont(font)
             painter.drawText(
                 QtCore.QRectF(point.x() - 31, point.y() + 20, 62, 16),
@@ -759,6 +793,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         self._pre_emergency_enabled: dict[QtGui.QAction, bool] = {}
         self._build_toolbar()
         self._build_layout()
+        self._build_status_bar()
         QtWidgets.QApplication.instance().installEventFilter(self)
         for control in (self.target_input, self.kp_input, self.ki_input, self.kd_input):
             control.lineEdit().installEventFilter(self)
@@ -923,6 +958,18 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.graph_item.setYRange(0, MAX_TEMPERATURE_DISPLAY_C, padding=0)
         self.duty_view.setYRange(0, MAX_OUTPUT_PERCENT, padding=0)
 
+    def _build_status_bar(self) -> None:
+        """A permanent bar of fixed height: a message appearing must not resize the graph."""
+        bar = QtWidgets.QStatusBar(self)
+        bar.setSizeGripEnabled(False)
+        bar.setFixedHeight(STATUS_BAR_HEIGHT)
+        bar.setStyleSheet(
+            "QStatusBar { background: #1a1d22; border-top: 1px solid #262a31; color: #c9ced6;"
+            " font-size: 9.5pt; padding-left: 12px; }"
+            "QStatusBar::item { border: none; }"
+        )
+        self.setStatusBar(bar)
+
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Process")
         self.process_toolbar = toolbar
@@ -940,6 +987,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         action_specs = (
             ("Run", self.start_process, "run", "#6fbf98"),
             ("Stop", self.stop_process, "stop", "#b8423a"),
+            ("Reset", self.reset_process, "reset", "#e8b33d"),
         )
         for label, callback, icon_name, accent in action_specs:
             action = QtGui.QAction(label, self)
@@ -947,6 +995,8 @@ class OvenWindow(QtWidgets.QMainWindow):
                 self.run_action = action
             elif label == "Stop":
                 self.stop_action = action
+            elif label == "Reset":
+                self.reset_action = action
             action.setIcon(self._toolbar_icon(icon_name, accent))
             action.setToolTip({
                 "Import": "Import process settings",
@@ -972,6 +1022,12 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.event_log_action.setToolTip("View events from this run")
         self.event_log_action.triggered.connect(self.show_run_events)
         toolbar.addAction(self.event_log_action)
+        self.summary_action = QtGui.QAction("Run summary", self)
+        self.summary_action.setIcon(self._toolbar_icon("summary", "#e4e7eb"))
+        self.summary_action.setToolTip("Key metrics of this run: timing, accuracy, heater use and data")
+        self.summary_action.triggered.connect(self.show_run_summary)
+        self.summary_action.setEnabled(False)  # Until there is run data to summarise
+        toolbar.addAction(self.summary_action)
 
         self.file_menu = QtWidgets.QMenu("File", self)
         self.file_actions: dict[str, QtGui.QAction] = {}
@@ -1072,6 +1128,19 @@ class OvenWindow(QtWidgets.QMainWindow):
         elif symbol == "stop":
             painter.setBrush(QtGui.QColor(accent))
             painter.drawRoundedRect(QtCore.QRectF(6, 6, 12, 12), 2, 2)
+        elif symbol == "reset":
+            # Familiar reset glyph: an open counterclockwise loop with an arrowhead.
+            arc = QtGui.QPainterPath(QtCore.QPointF(7, 6))
+            arc.cubicTo(QtCore.QPointF(9, 4.5), QtCore.QPointF(11, 4), QtCore.QPointF(12, 4))
+            arc.cubicTo(QtCore.QPointF(16.5, 4), QtCore.QPointF(20, 7.5), QtCore.QPointF(20, 12))
+            arc.cubicTo(QtCore.QPointF(20, 16.5), QtCore.QPointF(16.5, 20), QtCore.QPointF(12, 20))
+            arc.cubicTo(QtCore.QPointF(7.5, 20), QtCore.QPointF(4, 16.5), QtCore.QPointF(4, 12))
+            painter.drawPath(arc)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(accent))
+            painter.drawPolygon(QtGui.QPolygonF((
+                QtCore.QPointF(4, 4), QtCore.QPointF(4, 11), QtCore.QPointF(10, 7),
+            )))
         elif symbol in ("import_settings", "export_settings"):
             # Compact control sliders paired with the transfer direction.
             direction = "import" if symbol == "import_settings" else "export"
@@ -1112,6 +1181,11 @@ class OvenWindow(QtWidgets.QMainWindow):
             painter.drawRoundedRect(QtCore.QRectF(4, 3, 16, 18), 2, 2)
             for y, line_end in ((8, 16), (12, 16), (16, 13)):
                 painter.drawLine(QtCore.QPointF(8, y), QtCore.QPointF(line_end, y))
+        elif symbol == "summary":
+            # A small bar chart: run metrics at a glance.
+            painter.drawLine(QtCore.QPointF(4, 20), QtCore.QPointF(20, 20))
+            for x, top in ((7, 13), (12, 6), (17, 10)):
+                painter.drawRoundedRect(QtCore.QRectF(x - 1.5, top, 3, 17 - top), 1, 1)
         elif symbol == "folder":
             # Match the reference's outlined, tabbed folder.
             folder = QtGui.QPainterPath(QtCore.QPointF(3, 7))
@@ -1587,9 +1661,10 @@ class OvenWindow(QtWidgets.QMainWindow):
             pen=pg.mkPen(color, width=1.5),
             brush=pg.mkBrush(color),
         )
+        # A light tint of the marker colour ties each label to its point.
         annotation = pg.TextItem(
             label,
-            color="#fff1a8",
+            color=QtGui.QColor(color).lighter(125),
             anchor=(0.0, 1.0),
             fill=pg.mkBrush("#1c1f24"),
             border=pg.mkPen(color),
@@ -1649,8 +1724,16 @@ class OvenWindow(QtWidgets.QMainWindow):
                     break
             else:
                 annotation.setAnchor((0.5, 1.0))
-                label_data = view.mapSceneToView(marker_scene + QtCore.QPointF(0, -48))
-                annotation.setPos(label_data.x(), label_data.y())
+                label_scene = marker_scene + QtCore.QPointF(0, -48)
+                annotation.setPos(*_point_xy(view.mapSceneToView(label_scene)))
+                # Keep the fallback label inside the plot, e.g. for a marker at the right edge.
+                rect = annotation.mapRectToScene(annotation.boundingRect())
+                shift = QtCore.QPointF(
+                    max(0.0, bounds.left() - rect.left()) - max(0.0, rect.right() - bounds.right()),
+                    max(0.0, bounds.top() - rect.top()) - max(0.0, rect.bottom() - bounds.bottom()),
+                )
+                if not shift.isNull():
+                    annotation.setPos(*_point_xy(view.mapSceneToView(label_scene + shift)))
                 occupied_labels.append(annotation.mapRectToScene(annotation.boundingRect()))
 
     def _fit_visible_temperature_annotations(self, *_args) -> None:
@@ -1660,9 +1743,8 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def show_peak_error_marker(self, elapsed_s: float, temperature_c: float, target_c: float) -> None:
         """Annotate the run's largest deviation from the target once it completes."""
-        minutes, seconds = divmod(elapsed_s, 60.0)
-        label = f"Peak error {format_error_c(temperature_c - target_c)} at {int(minutes):02d}:{seconds:04.1f}"
-        self._add_temperature_marker(elapsed_s, temperature_c, label, "#ffe680")
+        label = f"Peak error {format_error_c(temperature_c - target_c)} at {format_duration(elapsed_s)}"
+        self._add_temperature_marker(elapsed_s, temperature_c, label, MARKER_COLORS["peak_error"])
 
     def _resize_duty_view(self) -> None:
         self.duty_view.setGeometry(self.graph_item.vb.sceneBoundingRect())
@@ -1779,9 +1861,10 @@ class OvenWindow(QtWidgets.QMainWindow):
             self._pre_emergency_enabled = {action: action.isEnabled() for action in actions}
         if active:
             for action in actions:
-                # The event log is read-only, so it stays available for diagnosis;
+                # The event log and run summary are read-only, so they stay available for diagnosis;
                 # minimise and exit stay too, since shutdown leaves the outputs off.
-                action.setEnabled(action in (self.event_log_action, self.window_control_action))
+                action.setEnabled(action in (self.event_log_action, self.summary_action,
+                                             self.window_control_action))
             for control in (
                 self.target_input, self.hold_input,
                 self.kp_enable, self.ki_enable, self.kd_enable,
@@ -1822,6 +1905,9 @@ class OvenWindow(QtWidgets.QMainWindow):
     def manual_command(self, name: str) -> None:
         del name
 
+    def reset_process(self) -> None:
+        pass
+
     def import_run(self) -> None:
         pass
 
@@ -1832,6 +1918,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         pass
 
     def show_run_events(self) -> None:
+        pass
+
+    def show_run_summary(self) -> None:
         pass
 
     def set_door_status(self, door: str | None, motor: str | None = "idle") -> None:

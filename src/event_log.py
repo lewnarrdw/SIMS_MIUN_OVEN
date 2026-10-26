@@ -135,7 +135,9 @@ class EventLogDialog(QtWidgets.QDialog):
         self.empty_label = QtWidgets.QLabel("No events recorded for this run.", self)
         self.empty_label.setStyleSheet("color: #9aa1ab;")
         layout.addWidget(self.empty_label)
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close, parent=self)
+        buttons = QtWidgets.QDialogButtonBox(parent=self)
+        # Plain text: the standard Close button underlines a C that has no shortcut.
+        buttons.addButton("Close", QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.refresh()

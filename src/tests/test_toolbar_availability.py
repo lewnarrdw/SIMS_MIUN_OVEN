@@ -53,6 +53,7 @@ class ToolbarAvailabilityTests(WindowTestCase):
         return {
             "run": self.window.run_action.isEnabled(),
             "stop": self.window.stop_action.isEnabled(),
+            "reset": self.window.reset_action.isEnabled(),
             "manual": self.window.manual_controls_action.isEnabled(),
             "manual_button": self.window.manual_button.isEnabled(),
         }
@@ -60,12 +61,12 @@ class ToolbarAvailabilityTests(WindowTestCase):
     def test_idle_offers_run_and_manual_controls_but_not_stop(self) -> None:
         self.show()
 
-        self.assertEqual(self.enabled(), {"run": True, "stop": False, "manual": True, "manual_button": True})
+        self.assertEqual(self.enabled(), {"run": True, "stop": False, "reset": True, "manual": True, "manual_button": True})
 
-    def test_run_dims_run_and_manual_controls_and_offers_stop(self) -> None:
+    def test_run_dims_run_reset_and_manual_controls_and_offers_stop(self) -> None:
         self.show(running=True, state="heating")
 
-        self.assertEqual(self.enabled(), {"run": False, "stop": True, "manual": False, "manual_button": False})
+        self.assertEqual(self.enabled(), {"run": False, "stop": True, "reset": False, "manual": False, "manual_button": False})
 
     def test_cool_down_still_counts_as_a_run(self) -> None:
         self.show(running=True, state="cooling")
@@ -84,7 +85,7 @@ class ToolbarAvailabilityTests(WindowTestCase):
 
         self.show(running=False, state="aborted", output_percent=0.0)
 
-        self.assertEqual(self.enabled(), {"run": True, "stop": False, "manual": True, "manual_button": True})
+        self.assertEqual(self.enabled(), {"run": True, "stop": False, "reset": True, "manual": True, "manual_button": True})
 
     def test_dimmed_stop_shortcut_sends_no_command(self) -> None:
         self.show()
@@ -108,7 +109,7 @@ class ToolbarAvailabilityTests(WindowTestCase):
 
         self.show(estop_active=False, state="ready")
 
-        self.assertEqual(self.enabled(), {"run": True, "stop": False, "manual": True, "manual_button": True})
+        self.assertEqual(self.enabled(), {"run": True, "stop": False, "reset": True, "manual": True, "manual_button": True})
 
 
 if __name__ == "__main__":

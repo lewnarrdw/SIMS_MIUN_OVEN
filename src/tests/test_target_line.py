@@ -69,12 +69,14 @@ class TargetLineTests(unittest.TestCase):
 
         self.assertEqual([float(x[0]), float(x[-1])], [x_min, x_max])
 
-    def test_window_has_no_reset_button(self) -> None:
-        labels = [action.text() for action in self.window.process_toolbar.actions()]
+    def test_line_stays_visible_after_reset(self) -> None:
+        self.service.samples = SAMPLES
+        self.show(state="aborted", run_started_at="2026-10-26T12:00:00")
 
-        self.assertNotIn("Reset", labels)
-        self.assertFalse(hasattr(self.window, "reset_action"))
-        self.assertFalse(hasattr(self.window, "reset_process"))
+        self.window.reset_process()
+        self.window.refresh()  # The worker has not handled the reset yet.
+
+        self.assertEqual(self.visible_target(), [self.window.target_input.value()] * 2)
 
 
 if __name__ == "__main__":
