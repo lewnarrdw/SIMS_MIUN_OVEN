@@ -48,13 +48,13 @@ class SettingsControlTests(unittest.TestCase):
         self.window.start_process()
         self.window.elapsed_s = 12.4
         self.window._update_status()
-        self.assertEqual(self.window.elapsed_label.text(), "Elapsed: 00:12.4")
+        self.assertEqual(self.window.elapsed_label.text(), "00:12.4")
 
         self.window.stop_process()
-        self.assertEqual(self.window.elapsed_label.text(), "Elapsed: 00:12.4")
+        self.assertEqual(self.window.elapsed_label.text(), "00:12.4")
 
         self.window.reset_process()
-        self.assertEqual(self.window.elapsed_label.text(), "Elapsed: 00:00.0")
+        self.assertEqual(self.window.elapsed_label.text(), "00:00.0")
     def test_pid_inputs_match_process_input_size_and_use_subscripts(self) -> None:
         process_size = self.window.target_input.size()
 

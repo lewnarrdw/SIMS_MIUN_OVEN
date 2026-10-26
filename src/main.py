@@ -239,7 +239,7 @@ class KilnWindow(gui.OvenWindow):
         self.stage_detail_label.setText(stage_detail)
 
         minutes, seconds = divmod(view.elapsed_s, 60.0)
-        self.elapsed_label.setText(f"Elapsed: {int(minutes):02d}:{seconds:04.1f}")
+        self.elapsed_label.setText(f"{int(minutes):02d}:{seconds:04.1f}")
         output = getattr(view, "output_percent", None)
         self.temperature_label.setText("N/A" if temperature is None else f"{temperature:.1f} °C")
         self.output_label.setText("N/A" if output is None else f"{output:.0f} %")
@@ -255,10 +255,7 @@ class KilnWindow(gui.OvenWindow):
         self.hold_remaining_label.setText(
             f"{int(hold_minutes):02d}:{int(hold_seconds):02d}"
         )
-        door_text = "N/A" if not view.door or view.door == "unknown" else view.door.title()
-        self.door_label.setText(f"Door: {door_text}")
-        color = "#4caf70" if view.door == "closed" else "#f4b942"
-        self.door_label.setStyleSheet(f"color: {color};")
+        self.set_door_status(view.door, getattr(view, "door_motor", "idle"))
         for widget in (self.target_input, self.hold_input):
             widget.setEnabled(not view.running)
         if view.error:

@@ -28,6 +28,27 @@ GRAPH_AXIS_DIVISIONS = 5
 GRAPH_MIN_TIME_RANGE_S = 0.5
 FONT_ASSET_DIRECTORY = Path(__file__).resolve().parent / "assets" / "fonts"
 FINISHED_RUN_STATES = frozenset({"complete", "aborted", "fault", "e_stop"})
+METRIC_ROW_TITLE_STYLE = "color: #b4bac3; font-family: IBM Plex Sans; font-size: 10.5pt; font-weight: 400;"
+DOOR_OK_COLOR = "#6fbf98"
+DOOR_ATTENTION_COLOR = "#e8b33d"
+DOOR_MOVING_COLOR = "#7fb8ea"
+DOOR_FAULT_COLOR = "#ff8a80"
+DOOR_UNKNOWN_COLOR = "#9aa1ab"
+
+
+def door_status(door: str | None, motor: str | None = "idle") -> tuple[str, str]:
+    """Return the door pill's (text, colour) for a limit-switch state and motor state."""
+    if motor == "fault":
+        return "Motor fault", DOOR_FAULT_COLOR
+    if door == "error":
+        return "Switch fault", DOOR_FAULT_COLOR
+    if motor in ("opening", "closing"):
+        return f"{motor.title()}…", DOOR_MOVING_COLOR
+    return {
+        "closed": ("Closed", DOOR_OK_COLOR),
+        "open": ("Open", DOOR_ATTENTION_COLOR),
+        "between": ("Partly open", DOOR_ATTENTION_COLOR),
+    }.get(door or "", ("N/A", DOOR_UNKNOWN_COLOR))
 
 
 def hold_window_span(
@@ -62,6 +83,23 @@ def minimize_available(platform: str, environ: dict[str, str], override: bool | 
     if not platform.startswith("linux"):
         return True
     return bool(environ.get("XDG_CURRENT_DESKTOP") or environ.get("DESKTOP_SESSION"))
+
+
+class StatusPill(QtWidgets.QLabel):
+    """Label drawn as a rounded pill with a painted status dot (font-independent)."""
+
+    DOT_DIAMETER = 8.0
+    DOT_LEFT = 11.0
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(self.palette().color(QtGui.QPalette.ColorRole.WindowText))
+        radius = self.DOT_DIAMETER / 2.0
+        painter.drawEllipse(QtCore.QPointF(self.DOT_LEFT + radius, self.height() / 2.0), radius, radius)
+        painter.end()
 
 
 class WindowControlButton(QtWidgets.QAbstractButton):
@@ -1280,7 +1318,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         metrics.addWidget(metrics_divider)
         hold_row = QtWidgets.QHBoxLayout()
         hold_label = QtWidgets.QLabel("Hold remaining")
-        hold_label.setStyleSheet("color: #b4bac3; font-family: IBM Plex Sans; font-size: 10.5pt; font-weight: 400;")
+        hold_label.setStyleSheet(METRIC_ROW_TITLE_STYLE)
         self.hold_remaining_label = QtWidgets.QLabel("--:--")
         self.hold_remaining_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.hold_remaining_label.setStyleSheet("color: #e8b33d; font-family: IBM Plex Mono; font-size: 16.5pt; font-weight: 600;")
@@ -1289,22 +1327,27 @@ class OvenWindow(QtWidgets.QMainWindow):
         hold_row.addWidget(self.hold_remaining_label)
         metrics.addLayout(hold_row)
 
-        bottom_row = QtWidgets.QHBoxLayout()
-        self.elapsed_label = QtWidgets.QLabel(
-            "Elapsed <span style='font-family: IBM Plex Mono; color: #c3c8cf;'>00:00.0</span>"
-        )
-        self.elapsed_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        self.elapsed_label.setStyleSheet(
-            "color: #9aa1ab; font-family: IBM Plex Sans; font-size: 10pt; font-weight: 400;"
-        )
-        self.door_label = QtWidgets.QLabel("Door: Unknown")
-        self.door_label.setStyleSheet(
-            "color: #6fbf98; font-family: IBM Plex Sans; font-size: 10pt; font-weight: 400;"
-        )
-        bottom_row.addWidget(self.elapsed_label)
-        bottom_row.addStretch(1)
-        bottom_row.addWidget(self.door_label)
-        metrics.addLayout(bottom_row)
+        elapsed_row = QtWidgets.QHBoxLayout()
+        elapsed_title = QtWidgets.QLabel("Elapsed")
+        elapsed_title.setStyleSheet(METRIC_ROW_TITLE_STYLE)
+        self.elapsed_label = QtWidgets.QLabel("00:00.0")
+        self.elapsed_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.elapsed_label.setStyleSheet("color: #c3c8cf; font-family: IBM Plex Mono; font-size: 16.5pt; font-weight: 600;")
+        elapsed_row.addWidget(elapsed_title)
+        elapsed_row.addStretch(1)
+        elapsed_row.addWidget(self.elapsed_label)
+        metrics.addLayout(elapsed_row)
+
+        door_row = QtWidgets.QHBoxLayout()
+        door_title = QtWidgets.QLabel("Door")
+        door_title.setStyleSheet(METRIC_ROW_TITLE_STYLE)
+        self.door_label = StatusPill()
+        self.door_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        door_row.addWidget(door_title)
+        door_row.addStretch(1)
+        door_row.addWidget(self.door_label)
+        metrics.addLayout(door_row)
+        self.set_door_status("unknown")
         side.addWidget(metrics_box)
 
         status_box = QtWidgets.QGroupBox()
@@ -1811,6 +1854,25 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def show_run_events(self) -> None:
         pass
+
+    def set_door_status(self, door: str | None, motor: str | None = "idle") -> None:
+        """Show the door as a colour-coded pill: a dot and the state on a tint of its colour."""
+        text, color = door_status(door, motor)
+        # refresh() runs every 100 ms; restyle only when the shown status changes.
+        if getattr(self, "_door_status_shown", None) == (text, color):
+            return
+        self._door_status_shown = (text, color)
+        tint = QtGui.QColor(color)
+        tint.setAlpha(38)
+        border = QtGui.QColor(color)
+        border.setAlpha(110)
+        self.door_label.setText(text)
+        self.door_label.setStyleSheet(
+            f"color: {color}; background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, {tint.alpha()});"
+            f" border: 1px solid rgba({border.red()}, {border.green()}, {border.blue()}, {border.alpha()});"
+            " border-radius: 11px; padding: 3px 12px 3px 26px;"
+            " font-family: IBM Plex Sans; font-size: 10.5pt; font-weight: 600;"
+        )
 
     def export_settings(self) -> None:
         pass
