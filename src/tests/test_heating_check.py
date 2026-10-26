@@ -96,7 +96,8 @@ class HeatingCheckControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.fault_reason, "heater_not_heating")
 
     def test_low_output_near_target_is_not_checked(self) -> None:
-        self.run_warm_up(44.7, 0.0, 3 * WINDOW_S, target_c=45.0)
+        # Holding 30 °C needs only about 20 % output, so near the target the check stays off.
+        self.run_warm_up(29.7, 0.0, 3 * WINDOW_S, target_c=30.0)
 
         self.assertLess(self.hardware.heater.percent, config.HEATING_CHECK_OUTPUT_PERCENT)
         self.assertEqual(self.controller.state, State.HEATING)

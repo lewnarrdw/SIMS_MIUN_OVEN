@@ -1,21 +1,21 @@
-"""Bounded PID controller with filtered derivative and anti-windup."""
+"""Bounded PID controller with filtered derivative, integral zone and anti-windup."""
 import math
 
 
 OUTPUT_MIN = 0.0
 OUTPUT_MAX = 100.0
 DERIVATIVE_FILTER_TAU_S = 0.9
-ANTI_WINDUP_GAIN_PER_S = 2.0
 INTEGRAL_OUTPUT_LIMIT = 100.0
 
 
 class PID:
-    __slots__ = ("kp", "ki", "kd", "integral", "last_temp", "filtered_derivative")
+    __slots__ = ("kp", "ki", "kd", "integral", "last_temp", "filtered_derivative", "integral_zone")
 
-    def __init__(self, kp, ki, kd):
+    def __init__(self, kp, ki, kd, integral_zone=math.inf):
         self.integral = 0.0
         self.last_temp = None
         self.filtered_derivative = 0.0
+        self.integral_zone = float(integral_zone)
         self.set_gains(kp, ki, kd)
 
     def set_gains(self, kp, ki, kd):
@@ -39,22 +39,21 @@ class PID:
         derivative = -self.kd * self.filtered_derivative
         self.last_temp = measured
 
-        proportional = self.kp * error
-        base_output = proportional + derivative + feedforward
-        integral = self.integral + self.ki * error * dt
-        unsaturated = base_output + integral
-        if math.isfinite(unsaturated):
-            output = max(OUTPUT_MIN, min(OUTPUT_MAX, unsaturated))
-        else:
-            output = OUTPUT_MIN
-
-        # Back-calculation unwinds the integral only while the output is clamped, so
-        # unsaturated control integrates exactly Ki * error * dt. The step is capped at
-        # 1 so a long dt cannot push the integral past the limit it is tracking.
-        tracking_step = min(1.0, ANTI_WINDUP_GAIN_PER_S * dt)
-        if math.isfinite(unsaturated):
-            integral += tracking_step * (output - unsaturated)
-        self.integral = max(-INTEGRAL_OUTPUT_LIMIT, min(INTEGRAL_OUTPUT_LIMIT, integral))
+        base_output = self.kp * error + derivative + feedforward
+        # Far from the target, feed-forward and P/D drive the approach; integrating there
+        # stores heat-up error that later carries the oven past the target.
+        integral = self.integral
+        if abs(error) <= self.integral_zone:
+            integral += self.ki * error * dt
+        # Conditional integration: while the output is pinned, integrate only up to the
+        # limit and never backwards. Back-calculation instead drove the integral far
+        # negative during a full-power heat-up, starving the heater near the target.
+        if error > 0 and base_output + integral > OUTPUT_MAX:
+            integral = max(self.integral, min(integral, OUTPUT_MAX - base_output))
+        elif error < 0 and base_output + integral < OUTPUT_MIN:
+            integral = min(self.integral, max(integral, OUTPUT_MIN - base_output))
+        if math.isfinite(integral):
+            self.integral = max(-INTEGRAL_OUTPUT_LIMIT, min(INTEGRAL_OUTPUT_LIMIT, integral))
 
         corrected = base_output + self.integral
         if not math.isfinite(corrected):

@@ -1,8 +1,10 @@
 """Compact process state machine. All methods run on the hardware worker."""
 from datetime import datetime
 from enum import Enum
+import math
 from .pid import PID
 from .safety import SafetyMonitor
+from .stability import StabilityDetector
 from hardware.sensors import DoorState
 from peak_tracking import PeakTracker
 
@@ -23,10 +25,14 @@ class State(Enum):
 class Controller:
     def __init__(self, hardware, config):
         self.hw, self.config = hardware, config
-        self.safety, self.pid = SafetyMonitor(config), PID(config.PID_KP, config.PID_KI, config.PID_KD)
+        self.safety = SafetyMonitor(config)
+        self.pid = PID(config.PID_KP, config.PID_KI, config.PID_KD,
+                       getattr(config, "PID_INTEGRAL_ZONE_C", math.inf))
+        self.stability = StabilityDetector(config.STABLE_TOLERANCE, config.STABLE_TIME_S,
+                                           getattr(config, "STABLE_IN_BAND_SHARE", 1.0))
         self.state, self.fault_reason = State.READY, ""
         self.target, self.hold_s, self.gains = config.MIN_SETPOINT, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD)
-        self.run_started = self.stable_since = self.hold_started = None
+        self.run_started = self.hold_started = None
         self.heating_start_temperature = self.cooling_start_temperature = None
         self.run_started_at = None
         self.run_settings = {}
@@ -58,7 +64,8 @@ class Controller:
         self.target = self.safety.validate_setpoint(target)
         self.hold_s = min(self.config.HOLD_DURATION_MAX_S, max(self.config.HOLD_DURATION_MIN_S, float(hold_s)))
         self.pid.set_gains(*gains); self.gains = tuple(gains); self.pid.reset()
-        self.run_started, self.stable_since, self.hold_started = now, None, None
+        self.run_started, self.hold_started = now, None
+        self.stability.reset()
         self.run_started_at = datetime.now().astimezone().isoformat(timespec="microseconds")
         self.run_settings = {"target_temperature_c": self.target, "hold_duration_s": self.hold_s,
             "kp": self.gains[0], "ki": self.gains[1], "kd": self.gains[2]}
@@ -102,7 +109,7 @@ class Controller:
         self.last_step = now
         self.hw.heater.off()
         self.hw.motor.stop()
-        self.stable_since = None
+        self.stability.reset()
         self.last_pid_time = None
         self._set_state(State.ABORTED, f"{reason}; start a new run to continue")
     def emergency_stop(self, reason="emergency_stop"):
@@ -187,17 +194,16 @@ class Controller:
                         (temperature - start_temperature) / (self.target - start_temperature)))
                 else:
                     self.progress_fraction = 1.0 if abs(temperature - self.target) <= self.config.STABLE_TOLERANCE else 0.0
-                if abs(temperature-self.target) <= self.config.STABLE_TOLERANCE:
-                    self.stable_since = now if self.stable_since is None else self.stable_since
-                    held = now-self.stable_since
-                    self.progress_detail = f"Stable {held:.0f}/{self.config.STABLE_TIME_S:.0f} s"
-                    if held >= self.config.STABLE_TIME_S:
-                        self.hold_started = now
-                        self.hold_elapsed_s = 0.0
-                        self.hold_reached_s = now-self.run_started
-                        self.hold_min, self.hold_min_time = temperature, now-self.run_started
-                        self._set_state(State.HOLDING, "Holding target")
-                else: self.stable_since, self.progress_detail = None, ""
+                if self.stability.update(now, temperature, self.target):
+                    self.hold_started = now
+                    self.hold_elapsed_s = 0.0
+                    self.hold_reached_s = now-self.run_started
+                    self.hold_min, self.hold_min_time = temperature, now-self.run_started
+                    self._set_state(State.HOLDING, "Holding target")
+                elif abs(temperature-self.target) <= self.config.STABLE_TOLERANCE:
+                    settled = self.stability.settled_s(self.target)
+                    self.progress_detail = f"Stable {settled:.0f}/{self.config.STABLE_TIME_S:.0f} s"
+                else: self.progress_detail = ""
             else:
                 elapsed = self.hold_elapsed_s + (now-self.hold_started)
                 if self.hold_min is None or temperature < self.hold_min:

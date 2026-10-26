@@ -14,9 +14,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 DEFAULT_TARGET_TEMPERATURE_C = 45.0
 DEFAULT_HOLD_DURATION_S = 60.0
-DEFAULT_KP = 0.10
-DEFAULT_KI = 0.006
-DEFAULT_KD = 0.05
+DEFAULT_KP = config.PID_KP
+DEFAULT_KI = config.PID_KI
+DEFAULT_KD = config.PID_KD
+# Upper limits for the PID inputs, well above the tuned gains in config.py.
+MAX_KP = 200.0
+MAX_KI = 5.0
+MAX_KD = 2000.0
 MAX_DURATION_S = 120.0
 MAX_TEMPERATURE_DISPLAY_C = 50.0
 MAX_OUTPUT_PERCENT = 100.0
@@ -1426,9 +1430,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         pid_section_layout.addWidget(self.pid_toggle)
 
         # Gains map temperature error/rate (°C) to heater output (%).
-        self.kp_input = self._spin(0.0, 10.0, DEFAULT_KP, decimals=2, step=0.01)
-        self.ki_input = self._spin(0.0, 10.0, DEFAULT_KI, decimals=3, step=0.001)
-        self.kd_input = self._spin(0.0, 10.0, DEFAULT_KD, decimals=2, step=0.01)
+        self.kp_input = self._spin(0.0, MAX_KP, DEFAULT_KP, decimals=2, step=0.5)
+        self.ki_input = self._spin(0.0, MAX_KI, DEFAULT_KI, decimals=3, step=0.005)
+        self.kd_input = self._spin(0.0, MAX_KD, DEFAULT_KD, decimals=1, step=10.0)
         for value_input in (self.kp_input, self.ki_input, self.kd_input):
             value_input.setFixedSize(120, 40)
         gain_units = "Gain maps temperature error in °C to heater output in %."

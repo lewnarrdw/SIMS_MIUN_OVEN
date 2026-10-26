@@ -39,13 +39,15 @@ import numpy as np
 
 import config
 from control.pid import PID
+from control.stability import StabilityDetector
 
 LOG_FILE = "pid_tuning_log.txt"
 HISTORY_FILE = "pid_tuning_history.jsonl"
 SUGGESTED_SETTINGS_FILE = "pid_suggested_settings.csv"
 
 # The GUI's gain fields: (minimum, maximum, decimals). Suggestions must be enterable.
-GAIN_LIMITS = {"kp": (0.0, 10.0, 2), "ki": (0.0, 10.0, 3), "kd": (0.0, 10.0, 2)}
+# The same ranges as the GUI's PID inputs (MAX_KP, MAX_KI and MAX_KD in gui.py).
+GAIN_LIMITS = {"kp": (0.0, 200.0, 2), "ki": (0.0, 5.0, 3), "kd": (0.0, 2000.0, 1)}
 STEP_S = 1.0
 MAX_DEAD_TIME_S = 90
 HEATER_LAG_GRID_S = (0.0, 2.0, 4.0, 7.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0)
@@ -391,13 +393,14 @@ def simulate_run(model: ThermalModel, gains: dict, target_c: float, start_c: flo
 
     A run that is not stable by max_duration_s reports a time to stable of infinity.
     """
-    pid = PID(gains["kp"], gains["ki"], gains["kd"])
+    pid = PID(gains["kp"], gains["ki"], gains["kd"], getattr(config, "PID_INTEGRAL_ZONE_C", math.inf))
     oven = SimulatedOven(model, start_c)
     feedforward = max(0.0, feedforward_per_degree * (target_c - config.ROOM_TEMPERATURE))
     period = max(STEP_S, float(config.LOOP_PERIOD_S))
-    tolerance, stable_time = config.STABLE_TOLERANCE, config.STABLE_TIME_S
+    stability = StabilityDetector(config.STABLE_TOLERANCE, config.STABLE_TIME_S,
+                                  getattr(config, "STABLE_IN_BAND_SHARE", 1.0))
     temperature, output, next_control = start_c, 0.0, 0.0
-    stable_since = hold_started = None
+    hold_started = None
     peak, crossed, hold_errors = start_c, False, []
     elapsed = 0.0
     while hold_started is not None or elapsed <= max_duration_s:
@@ -412,12 +415,8 @@ def simulate_run(model: ThermalModel, gains: dict, target_c: float, start_c: flo
             if peak >= config.MAX_TEMPERATURE - SAFETY_MARGIN_C:
                 break
         if hold_started is None:
-            if abs(temperature - target_c) <= tolerance:
-                stable_since = elapsed if stable_since is None else stable_since
-                if elapsed - stable_since >= stable_time:
-                    hold_started = elapsed
-            else:
-                stable_since = None
+            if stability.update(elapsed, temperature, target_c):
+                hold_started = elapsed
         else:
             hold_errors.append(temperature - target_c)
             if elapsed - hold_started >= hold_s:
@@ -524,8 +523,9 @@ def tune(model: ThermalModel, current: dict, target_c: float, start_c: float,
     # A coarse grid as well as the current and SIMC gains keeps the local search
     # from getting stuck near a poor starting point.
     starts = [_round_gains(current), simc, _round_gains({name: value * 0.5 for name, value in simc.items()})]
+    starts.append(_round_gains({"kp": config.PID_KP, "ki": config.PID_KI, "kd": config.PID_KD}))
     starts += [_round_gains({"kp": kp, "ki": ki, "kd": kd})
-               for kp in (1.0, 3.0, 10.0) for ki in (0.005, 0.02, 0.08) for kd in (0.0, 10.0)]
+               for kp in (3.0, 10.0, 30.0) for ki in (0.02, 0.08, 0.2) for kd in (0.0, 100.0, 600.0)]
     best, best_score, best_result = starts[0], math.inf, None
     tried = set()
 

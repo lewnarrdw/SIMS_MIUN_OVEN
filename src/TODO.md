@@ -1,6 +1,7 @@
 # TODO
 
 - Tune the PID on the real oven with `pid_tuning_monitor.py`: after each run, read the latest report in `data/pid_tuning_log.txt`, import `data/pid_suggested_settings.csv` (File > Import settings), and repeat. Remove the module, its application hook, and its tests once a report says the suggestion has settled. If a report suggests a new `FF_PERCENT_PER_DEGREE`, try it in `config.py`. The PID integral was fixed on 2026-10-22 (it previously applied only about a third of Ki at a 1 s loop), so gains tuned before then behave differently.
+- Verify the 2026-10-26 tuning on the real oven (Kp 33, Ki 0.183, Kd 660, `PID_INTEGRAL_ZONE_C` 1 °C, `FF_PERCENT_PER_DEGREE` 2.1, hold after 120 s settled). Simulated on the model fitted to kiln-run-20261023-135828: full power to about 2.5 °C below target, 30 °C reached in about 5 min, overshoot about 0.2 °C, hold detected at about 12 min. If a real run overshoots by more than 0.3 °C, lower Kp first; if the output chatters audibly, lower Kd. Settings CSVs exported earlier (including `data/pid_suggested_settings.csv`) still hold the weak 1.61/0.02/0.01 gains, so do not import them.
 
 - Add a compact completed-run summary (peak temperature, time of peak, and difference from target) in the process status panel, in addition to the graph marker.
 - Add a graph marker showing elapsed time to reach the target temperature (warm-up time).

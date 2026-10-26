@@ -42,8 +42,14 @@ MIN_SETPOINT = 30.0
 MAX_SETPOINT = 45.0
 MAX_TEMPERATURE = 50.0
 DOOR_SAFE_TEMPERATURE = 30.0
+# Hold starts once the temperature has settled: over the last STABLE_TIME_S, the median
+# reading is within STABLE_TOLERANCE of the target and at least STABLE_IN_BAND_SHARE of
+# the readings are inside that band. Simulated on the fitted oven model (see the PID
+# note below), 120 s was the shortest window after which the temperature never left
+# the band again; 30-60 s windows started the hold while it was still drifting.
 STABLE_TOLERANCE = 0.1
-STABLE_TIME_S = 30.0
+STABLE_TIME_S = 120.0
+STABLE_IN_BAND_SHARE = 0.9
 HOLD_DURATION_MIN_S = 1.0
 HOLD_DURATION_MAX_S = 120.0
 SENSOR_PERIOD_S = 1.0 / 15.0
@@ -57,11 +63,20 @@ SENSOR_FAULT_TIMEOUT_S = 2.0
 HEATING_CHECK_OUTPUT_PERCENT = 80.0
 HEATING_CHECK_WINDOW_S = 120.0
 HEATING_CHECK_MIN_RISE_C = 1.0
-PID_KP = 10.0
-PID_KI = 0.1
-PID_KD = 1.0
+# PID tuned 2026-10-26 from kiln-run-20261023-135828: the oven fits a first-order lag
+# with dead time (gain 0.47 °C per % output, time constant 945 s, dead time 17 s;
+# 0.21 °C RMS fit over the 35-minute run). The gains (Ti = 180 s, Td = 20 s) came from
+# a closed-loop search on that model, checked against gain and time constant ±30 %,
+# twice the dead time and rooms of 18.5-22.5 °C.
+PID_KP = 33.0
+PID_KI = 0.183
+PID_KD = 660.0
+# The integral only accumulates within this many °C of the target. Integrating during
+# the heat-up stores error that carries the oven past the target.
+PID_INTEGRAL_ZONE_C = 1.0
 ROOM_TEMPERATURE = 20.0
-FF_PERCENT_PER_DEGREE = 1.0
+# Steady output per °C above room temperature: 1 / 0.47 °C per % from the fit above.
+FF_PERCENT_PER_DEGREE = 2.1
 DATA_DIRECTORY = "data"
 # Minimise button: None shows it only when a desktop session (with a taskbar) can
 # restore the window; True or False forces it. A kiosk-started Pi has no way back.
