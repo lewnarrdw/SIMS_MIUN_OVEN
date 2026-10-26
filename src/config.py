@@ -15,9 +15,19 @@ MOTOR_ENABLE_PIN = None  # No enable/sleep signal is specified
 DOOR_LIMIT_OPEN_PIN = 20
 DOOR_LIMIT_CLOSED_PIN = 16
 DOOR_TIMEOUT_S = 10.0
-TOWER_PINS = {"red": 22, "yellow": 17, "green": 23, "white": 24, "buzzer": 27}
+# Signal tower outputs, lights listed top to bottom. The schematic net SIGNAL_WHITE
+# (BCM GPIO24) drives the tower's orange light. Red and yellow are swapped relative to
+# All_pinnar.docx: the single-light tests on the Pi showed red on GPIO17, yellow on GPIO22.
+TOWER_PINS = {"red": 17, "orange": 24, "yellow": 22, "green": 23, "buzzer": 27}
+TOWER_LIGHTS = ("red", "orange", "yellow", "green")  # Top to bottom
 BUZZER_TEST_S = 1.0  # How long Manual controls > Test buzzer sounds the buzzer
+LIGHT_TEST_STEP_S = 0.6  # Pace of Manual controls > Light tower > Test all lights
+SINGLE_LIGHT_TEST_S = 3.0  # How long a single-light test keeps its light on
 RELAY_ACTIVE_LOW = True
+# Per-output polarity. GPIO17 (red) is on optoisolator U56 with the heater and door
+# motor, which are active-high; the other outputs are on U23 and switch on when LOW.
+# Driving red active-low lit it in Ready and turned it off during E-Stop.
+TOWER_ACTIVE_LOW = {"red": False, "orange": True, "yellow": True, "green": True, "buzzer": True}
 BUTTON_START_PIN = 13
 BUTTON_STOP_PIN = 21
 # The unpressed stop input reads LOW; HIGH means pressed.

@@ -99,8 +99,9 @@ class PiDiagnostics:
             output("Motor IN2 (close)", config.MOTOR_IN2_PIN)
             if config.MOTOR_ENABLE_PIN is not None:
                 output("Motor enable", config.MOTOR_ENABLE_PIN)
+            tower_active_low = getattr(config, "TOWER_ACTIVE_LOW", {})
             for name, pin in config.TOWER_PINS.items():
-                output(f"Tower {name}", pin, active_high)
+                output(f"Tower {name}", pin, not tower_active_low.get(name, config.RELAY_ACTIVE_LOW))
         except Exception:
             self.close()
             raise
@@ -352,7 +353,7 @@ def show_page_two(hw: PiDiagnostics) -> str:
         line("4. Pulse red signal")
         line("5. Pulse yellow signal")
         line("6. Pulse green signal")
-        line("7. Pulse white signal")
+        line("7. Pulse orange signal (schematic SIGNAL_WHITE)")
         line("8. Pulse buzzer")
         line("9. Heater relay pulse test (1 second; checks E-STOP, closed door, and temperature)")
         line("10. Go to inputs / sensor page")
@@ -371,7 +372,7 @@ def show_page_two(hw: PiDiagnostics) -> str:
             line("[SAFE] Both motor directions and enable set OFF.")
             pause()
         elif choice in {"4", "5", "6", "7", "8"}:
-            signal = {"4": "red", "5": "yellow", "6": "green", "7": "white", "8": "buzzer"}[choice]
+            signal = {"4": "red", "5": "yellow", "6": "green", "7": "orange", "8": "buzzer"}[choice]
             hw.test_signal(signal)
             pause()
         elif choice == "9":

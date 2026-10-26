@@ -17,8 +17,11 @@ from application import Application
 from main import KilnWindow
 from tests.test_emergency_stop import FakeHardware, FakeService, wait_for
 
+LIGHT_TESTS = ["Test all lights", "Test red light (GPIO17)", "Test orange light (GPIO24)",
+               "Test yellow light (GPIO22)", "Test green light (GPIO23)"]
+NO_LIGHT_TESTS = dict.fromkeys(LIGHT_TESTS, False)
 ALL_ENABLED = {"Open door": True, "Close door": True, "Test buzzer": True,
-               "Heater on": True, "Heater off": True}
+               "Heater on": True, "Heater off": True} | dict.fromkeys(LIGHT_TESTS, True)
 
 
 class ManualControlsAvailabilityTests(unittest.TestCase):
@@ -45,7 +48,8 @@ class ManualControlsAvailabilityTests(unittest.TestCase):
 
     def test_door_and_heater_on_are_greyed_out_during_a_run(self) -> None:
         self.assertEqual(self.availability(running=True, state="heating"),
-                         ALL_ENABLED | {"Open door": False, "Close door": False, "Heater on": False})
+                         ALL_ENABLED | {"Open door": False, "Close door": False, "Heater on": False}
+                         | NO_LIGHT_TESTS)
 
     def test_door_buttons_are_greyed_out_while_the_door_opens(self) -> None:
         self.assertEqual(self.availability(door_motor="opening", door="between"),
@@ -60,9 +64,16 @@ class ManualControlsAvailabilityTests(unittest.TestCase):
 
         self.assertEqual(self.availability(door_motor="idle", door="open"), ALL_ENABLED)
 
-    def test_door_stays_usable_but_heater_on_is_greyed_out_during_a_fault(self) -> None:
+    def test_door_stays_usable_but_heater_on_and_light_tests_are_greyed_out_during_a_fault(self) -> None:
         self.assertEqual(self.availability(state="fault", detail="over_temperature"),
-                         ALL_ENABLED | {"Heater on": False})
+                         ALL_ENABLED | {"Heater on": False} | NO_LIGHT_TESTS)
+        self.assertFalse(self.window.light_tower_menu.isEnabled())
+
+    def test_light_tower_menu_returns_after_a_run(self) -> None:
+        self.availability(running=True, state="heating")
+
+        self.assertEqual(self.availability(running=False, state="complete"), ALL_ENABLED)
+        self.assertTrue(self.window.light_tower_menu.isEnabled())
 
     def test_heater_on_is_greyed_out_during_estop(self) -> None:
         availability = self.availability(state="e_stop", estop_active=True)

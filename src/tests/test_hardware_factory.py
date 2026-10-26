@@ -62,6 +62,7 @@ class EstopInputTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"gpiozero": fake_gpiozero()}), \
                 mock.patch.object(factory, "Max31865Probe"):
             hardware = factory.create_hardware(settings)
+        self.addCleanup(hardware.tower.stop_refresh)
         device = next(device for device in FakeDevice.created if device.pin == config.ESTOP_SENSE_PIN)
         return hardware, device
 
@@ -94,6 +95,31 @@ class EstopInputTests(unittest.TestCase):
         self.assertFalse(hardware.estop())
         device.level = "high"
         self.assertTrue(hardware.estop())
+
+
+class TowerPolarityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        FakeDevice.created = []
+        settings = SimpleNamespace(**{
+            name: getattr(config, name) for name in dir(config) if name.isupper()
+        })
+        with mock.patch.dict(sys.modules, {"gpiozero": fake_gpiozero()}),                 mock.patch.object(factory, "Max31865Probe"):
+            self.hardware = factory.create_hardware(settings)
+        self.addCleanup(self.hardware.tower.stop_refresh)
+
+    def device(self, name: str) -> FakeDevice:
+        return next(device for device in FakeDevice.created if device.pin == config.TOWER_PINS[name])
+
+    def test_red_on_the_u56_optoisolator_is_driven_active_high(self) -> None:
+        self.assertIs(self.device("red").kwargs["active_high"], True)
+
+    def test_u23_outputs_are_driven_active_low(self) -> None:
+        for name in ("orange", "yellow", "green", "buzzer"):
+            self.assertIs(self.device(name).kwargs["active_high"], False, name)
+
+    def test_every_tower_output_starts_off(self) -> None:
+        for name in config.TOWER_PINS:
+            self.assertIs(self.device(name).kwargs["initial_value"], False, name)
 
 
 if __name__ == "__main__":

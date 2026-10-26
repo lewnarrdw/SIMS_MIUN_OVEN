@@ -20,15 +20,17 @@ HEATER_BCM = 7
 MOTOR_OPEN_BCM = 5
 MOTOR_CLOSE_BCM = 6
 TOWER_BCM = {
-    "red": 22,
-    "yellow": 17,
+    "red": 17,  # Swapped with yellow relative to All_pinnar.docx (tested on the Pi)
+    "yellow": 22,
     "green": 23,
-    "white": 24,
+    "orange": 24,  # Schematic net SIGNAL_WHITE
     "buzzer": 27,
 }
 TEMP_CS_BCM = 18
 MAX_MOTOR_SECONDS = 10.0
 RELAY_ACTIVE_LOW = True
+# Red (GPIO17) is on optoisolator U56 with the heater and motor, which switch on HIGH.
+TOWER_ACTIVE_HIGH = {"red"}
 
 
 def main() -> int:
@@ -73,7 +75,7 @@ def main() -> int:
     add_output("Motor open", MOTOR_OPEN_BCM)
     add_output("Motor close", MOTOR_CLOSE_BCM)
     for name, pin in TOWER_BCM.items():
-        add_output(name, pin, active_low=RELAY_ACTIVE_LOW)
+        add_output(name, pin, active_low=RELAY_ACTIVE_LOW and name not in TOWER_ACTIVE_HIGH)
     # Heater output is intentionally not claimed: the heater is disconnected,
     # and BCM GPIO7 is also SPI CE1 on the Pi header.
 
@@ -171,7 +173,7 @@ def main() -> int:
 6. Pulse red signal
 7. Pulse yellow signal
 8. Pulse green signal
-9. Pulse white signal
+9. Pulse orange signal (SIGNAL_WHITE)
 10. Pulse buzzer
 11. Heater status (disconnected; not driven)
 0. Quit""")
@@ -192,7 +194,7 @@ def main() -> int:
             stop_motor()
             print("[STOP] Motor outputs off.")
         elif choice in {"6", "7", "8", "9", "10"}:
-            name = {"6": "red", "7": "yellow", "8": "green", "9": "white", "10": "buzzer"}[choice]
+            name = {"6": "red", "7": "yellow", "8": "green", "9": "orange", "10": "buzzer"}[choice]
             pulse(name)
         elif choice == "11":
             print(f"[SKIPPED] Heater is disconnected; BCM GPIO{HEATER_BCM} was not initialized.")

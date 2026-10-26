@@ -91,6 +91,10 @@ class KilnWindow(gui.OvenWindow):
             "Close door": door_enabled,
             "Heater on": not view.running and view.state not in ("fault", "e_stop"),
         }
+        # Light tests would hide the run state or an alarm, which the worker refuses.
+        lights_enabled = not view.running and view.state not in ("fault", "e_stop")
+        enabled |= dict.fromkeys(self.light_test_labels, lights_enabled)
+        self.light_tower_menu.setEnabled(lights_enabled)
         for label, action in self.manual_actions.items():
             action.setEnabled(enabled.get(label, True))
 

@@ -1,6 +1,8 @@
 """Heater, door motor and signal tower output drivers."""
 from enum import Enum
 import math
+import threading
+import time
 from .sensors import DoorState
 
 class Heater:
@@ -82,24 +84,134 @@ class DoorMotor:
         self.in1.close(); self.in2.close()
         if self.enable is not None: self.enable.close()
 
+ALARM_STATES = ("fault", "e_stop")
+RUN_STATES = ("door_moving", "heating", "holding", "cooling")
+FAULT_BLINK_HZ = 1.0
+DOOR_MOVING_BLINK_HZ = 4.0
+RUN_BLINK_HZ = 1.0
+COMPLETE_BLINK_HZ = 2.0
+# Three short beeps when a run completes: (start, end) offsets in seconds.
+COMPLETE_CHIRPS = ((0.0, 0.15), (0.3, 0.45), (0.6, 0.75))
+
+def blink_on(now, hz):
+    """True during the first half of each blink period."""
+    return now * hz % 1.0 < 0.5
+
+def tower_lights(state, now, door_moving=False, hot=False):
+    """The lights the tower shows; the buzzer is decided separately.
+
+    Red: steady for E-Stop, blinking for a fault. Orange: the oven is at or above
+    the door-safe temperature. Yellow: blinks at 4 Hz while the door is between its
+    limit switches or driven, and then only an alarm's red may show with it. Green:
+    steady when ready, blinking during a run and faster once a run completes.
+    """
+    lit = set()
+    if state == "e_stop" or (state == "fault" and blink_on(now, FAULT_BLINK_HZ)): lit.add("red")
+    if door_moving:
+        if blink_on(now, DOOR_MOVING_BLINK_HZ): lit.add("yellow")
+        return lit
+    if hot: lit.add("orange")
+    if state in RUN_STATES:
+        if blink_on(now, RUN_BLINK_HZ): lit.add("green")
+    elif state == "complete":
+        if blink_on(now, COMPLETE_BLINK_HZ): lit.add("green")
+    elif state not in ALARM_STATES:
+        lit.add("green")
+    return lit
+
+def light_test_steps(lights, step_s):
+    """(lit lights, duration_s) steps that exercise every light; lights are top to bottom."""
+    lights, fast_s = tuple(lights), step_s / 3.0
+    steps = [({light}, step_s) for light in lights]  # Top to bottom, one at a time
+    steps.append((set(), step_s / 2.0))
+    # A ball bouncing from the bottom to the top and back, twice.
+    bounce = list(reversed(lights)) + list(lights[1:-1])
+    steps += [({light}, fast_s) for light in bounce * 2 + list(reversed(lights))]
+    # Fill up from the bottom, then flash the full tower.
+    steps += [(set(lights[index:]), step_s) for index in range(len(lights) - 1, -1, -1)]
+    steps += [(lit, fast_s) for _ in range(3) for lit in (set(), set(lights))]
+    # Alternate every other light, like a level crossing.
+    steps += [(set(lights[start::2]), step_s / 2.0) for _ in range(4) for start in (0, 1)]
+    steps.append((set(), step_s))
+    return steps
+
 class SignalTower:
     def __init__(self, outputs):
         self.outputs = outputs
         self.state = "ready"
+        self.door_moving, self.hot = False, False
         self.buzzer_test_until = None
+        self.light_test = []  # Remaining (lit lights, end time) steps of a light test
+        self.chirp_started, self._chirp_pending = None, False
+        self.now = 0.0
+        self._shown = None
+        self._lock = threading.RLock()
+        self._refresh_stop, self._refresh_thread = None, None
     def show(self, state):
-        self.state = state
-        color = "red" if state in ("fault", "e_stop") else "yellow" if state in ("door_moving", "heating", "holding", "cooling") else "green"
-        buzzer = state in ("fault", "e_stop") or self.buzzer_test_until is not None
-        for name, output in self.outputs.items():
-            output.on() if name == color or (name == "buzzer" and buzzer) else output.off()
+        with self._lock:
+            if state == "complete" and self.state != "complete": self._chirp_pending = True
+            elif state != "complete": self.chirp_started, self._chirp_pending = None, False
+            self.state = state
+            if state in ALARM_STATES: self.light_test = []
+            self._refresh()
+    def set_conditions(self, door_moving, hot):
+        """Inputs the lights show besides the process state; update() applies them."""
+        with self._lock:
+            self.door_moving, self.hot = bool(door_moving), bool(hot)
     def test_buzzer(self, now, duration_s):
         """Sound the buzzer briefly; update() ends the test without blocking."""
-        self.buzzer_test_until = now + duration_s
-        self.show(self.state)
+        with self._lock:
+            self.buzzer_test_until = now + duration_s
+            self.update(now)
+    def test_lights(self, now, steps):
+        """Play (lit lights, duration_s) steps in place of the state lights; update() advances them."""
+        with self._lock:
+            if self.state in ALARM_STATES:
+                raise RuntimeError("The light tower is showing an alarm")
+            self.light_test, end = [], now
+            for lit, duration_s in steps:
+                end += duration_s
+                self.light_test.append((frozenset(lit), end))
+            self.update(now)
     def update(self, now):
-        if self.buzzer_test_until is not None and now >= self.buzzer_test_until:
-            self.buzzer_test_until = None
-            self.show(self.state)
+        with self._lock:
+            # The worker and the refresh thread both update; never let a stale tick
+            # time step the blinks back and flash a light that just turned off.
+            now = self.now = max(now, self.now)
+            if self.buzzer_test_until is not None and now >= self.buzzer_test_until:
+                self.buzzer_test_until = None
+            while self.light_test and now >= self.light_test[0][1]:
+                self.light_test.pop(0)
+            if self._chirp_pending: self.chirp_started, self._chirp_pending = now, False
+            self._refresh()
+    def _refresh(self):
+        now = self.now
+        if self.light_test:
+            lit = set(self.light_test[0][0])
+        else:
+            lit = tower_lights(self.state, now, self.door_moving, self.hot)
+        chirping = self.chirp_started is not None and any(
+            start <= now - self.chirp_started < end for start, end in COMPLETE_CHIRPS)
+        if self.state in ALARM_STATES or self.buzzer_test_until is not None or chirping: lit.add("buzzer")
+        # Blinks refresh every few milliseconds; write the pins only when the pattern changes.
+        if lit == self._shown: return
+        self._shown = lit
+        for name, output in self.outputs.items():
+            output.on() if name in lit else output.off()
+    def start_refresh(self, interval_s=0.01):
+        """Keep blink timing even between control-loop ticks with a background refresh."""
+        if self._refresh_thread is not None: return
+        self._refresh_stop = threading.Event()
+        def run():
+            while not self._refresh_stop.wait(interval_s):
+                self.update(time.monotonic())
+        self._refresh_thread = threading.Thread(target=run, name="signal-tower", daemon=True)
+        self._refresh_thread.start()
+    def stop_refresh(self):
+        if self._refresh_thread is None: return
+        self._refresh_stop.set()
+        self._refresh_thread.join(timeout=1.0)
+        self._refresh_thread = None
     def close(self):
+        self.stop_refresh()
         for output in self.outputs.values(): output.off(); output.close()

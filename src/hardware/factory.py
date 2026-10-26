@@ -14,6 +14,8 @@ class Hardware:
     def close(self):
         self.heater.emergency_off()
         self.motor.stop()
+        # Stop the blink thread before the tower pins are released below.
+        self.tower.stop_refresh()
         self.tower.show("idle")
         for device in reversed(self.devices):
             try:
@@ -70,11 +72,14 @@ def create_hardware(config):
         )
         devices.append(estop_device)
         estop = lambda: not estop_device.is_active
+        # The tower outputs sit on two optoisolators with different polarities.
+        tower_active_low = getattr(config, "TOWER_ACTIVE_LOW", {})
         tower_outputs = {
-            name: output(pin, not config.RELAY_ACTIVE_LOW)
+            name: output(pin, not tower_active_low.get(name, config.RELAY_ACTIVE_LOW))
             for name, pin in config.TOWER_PINS.items()
         }
         tower = SignalTower(tower_outputs)
+        tower.start_refresh()
         return Hardware(
             devices, TemperatureSensor(probe, config.FILTER_WINDOW), probe,
             switches, motor, heater, tower, buttons, estop, estop_device,

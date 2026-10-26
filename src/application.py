@@ -8,6 +8,7 @@ import threading
 import time
 
 from control.controller import Controller, State
+from hardware.actuators import light_test_steps
 from hardware.factory import create_hardware
 from data_manager import DataManager
 from pid_tuning_monitor import append_recommendation
@@ -53,7 +54,8 @@ COMMAND_LABELS = {
     "start": "Start", "stop": "Stop", "reset": "Reset", "open": "Open door",
     "close": "Close door", "heater_on": "Heater on", "heater_off": "Heater off",
     "test_buzzer": "Buzzer test", "defaults": "Restore defaults", "settings": "Settings",
-    "tune": "PID tuning",
+    "tune": "PID tuning", "test_lights": "Light tower test",
+    **{f"test_light_{light}": f"{light.title()} light test" for light in ("red", "orange", "yellow", "green")},
 }
 
 # Physical buttons and their on-screen equivalents queue these same commands.
@@ -108,6 +110,7 @@ class Application:
         self._pending_pid_event = None
         self._append_event("app_started", "Application started")
         self._last_door_state = self.hw.switches.state().value
+        self._oven_hot = False  # Last valid reading at or above the door-safe temperature
         self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="run-storage")
         self._view = ViewState(False,0,0.0,"","Ready to run",0.0,config.MIN_SETPOINT,0.0,"unknown","ready",None,None,None,None,False,
             start_target_c=self._start_settings["target_temperature_c"])
@@ -417,6 +420,19 @@ class Application:
                 elif name == "test_buzzer":
                     self.hw.tower.test_buzzer(now, self.config.BUZZER_TEST_S)
                     self._append_event("manual_control", "Manual: buzzer test", now)
+                elif name == "test_lights" or name.startswith("test_light_"):
+                    if self.controller.active:
+                        raise RuntimeError("The light tower shows the run state during a run")
+                    if name == "test_lights":
+                        steps = light_test_steps(self.config.TOWER_LIGHTS, self.config.LIGHT_TEST_STEP_S)
+                        description = "Manual: light tower test"
+                    else:
+                        light = name.removeprefix("test_light_")
+                        if light not in self.config.TOWER_LIGHTS: raise ValueError(f"Unknown light: {light}")
+                        steps = [({light}, self.config.SINGLE_LIGHT_TEST_S)]
+                        description = f"Manual: {light} light test (BCM GPIO{self.config.TOWER_PINS[light]})"
+                    self.hw.tower.test_lights(now, steps)
+                    self._append_event("manual_control", description, now)
                 elif name == "heater_on":
                     if self.controller.active:
                         raise RuntimeError("Manual heating is unavailable during a run")
@@ -513,6 +529,12 @@ class Application:
                 if self._pending_pid_event and now - self._pending_pid_event["last_change"] >= 0.6:
                     self._flush_pid_event()
                 self.hw.heater.update(now)
+                if temperature is not None:
+                    self._oven_hot = temperature >= self.config.DOOR_SAFE_TEMPERATURE
+                # "Between" includes a door pushed by hand, so check the switches, not just the motor.
+                door_moving = (door_state == "between"
+                               or self.hw.motor.state.value in ("opening", "closing"))
+                self.hw.tower.set_conditions(door_moving, self._oven_hot)
                 self.hw.tower.update(now)
                 self._publish()
                 next_tick += period

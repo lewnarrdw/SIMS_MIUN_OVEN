@@ -977,6 +977,20 @@ class OvenWindow(QtWidgets.QMainWindow):
             action = self.manual_menu.addAction(label)
             action.triggered.connect(lambda _checked=False, name=command_name: self.manual_command(name))
             self.manual_actions[label] = action
+        # Single-light tests show which BCM pin drives which light when wiring is in doubt.
+        self.light_tower_menu = QtWidgets.QMenu("Light tower", self)
+        light_tests = [("Test all lights", "test_lights")] + [
+            (f"Test {light} light (GPIO{config.TOWER_PINS[light]})", f"test_light_{light}")
+            for light in config.TOWER_LIGHTS
+        ]
+        self.light_test_labels = [label for label, _ in light_tests]
+        for label, command_name in light_tests:
+            action = self.light_tower_menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, name=command_name: self.manual_command(name))
+            self.manual_actions[label] = action
+            if command_name == "test_lights":
+                self.light_tower_menu.addSeparator()
+        self.manual_menu.insertMenu(self.manual_actions["Heater on"], self.light_tower_menu)
         self.manual_button = QtWidgets.QToolButton(self)
         self.manual_button.setText("Manual controls  \u25be")
         self.manual_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -984,7 +998,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.manual_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.manual_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         self.manual_button.setMenu(self.manual_menu)
-        self.manual_button.setToolTip("Open door, close door, test the buzzer, or control the heater")
+        self.manual_button.setToolTip("Open door, close door, test the buzzer and lights, or control the heater")
         toolbar.addWidget(self.manual_button)
 
         # Fullscreen has no title bar, so the window controls sit at the toolbar's right edge.
