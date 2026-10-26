@@ -82,6 +82,17 @@ class KilnWindow(gui.OvenWindow):
     def manual_command(self, name):
         self.service.command(name)
 
+    def _update_toolbar_actions(self, view):
+        """Dim Run, Stop, Reset and Manual controls when the worker would refuse them."""
+        if self._emergency_stop_shown is not None:
+            return  # The E-Stop lock owns the toolbar until it is released.
+        heater_on = (getattr(view, "output_percent", 0.0) or 0.0) > 0.0
+        self.run_action.setEnabled(not view.running)
+        self.reset_action.setEnabled(not view.running)
+        # Outside a run, Stop still turns off manual heating.
+        self.stop_action.setEnabled(view.running or heater_on)
+        self.manual_controls_action.setEnabled(not view.running)
+
     def _update_manual_actions(self, view):
         """Grey out manual controls the worker would reject in the live state."""
         door_moving = getattr(view, "door_motor", "idle") in ("opening", "closing")
@@ -127,6 +138,7 @@ class KilnWindow(gui.OvenWindow):
         live_view, live_samples = self.service.snapshot()
         self.set_emergency_stop(getattr(live_view, "estop_active", False))
         self._update_manual_actions(live_view)
+        self._update_toolbar_actions(live_view)
         run_started_at = getattr(live_view, "run_started_at", None)
         if run_started_at is not None and run_started_at != self._live_run_started_at:
             self._live_run_started_at = run_started_at

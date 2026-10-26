@@ -903,7 +903,9 @@ class OvenWindow(QtWidgets.QMainWindow):
             "QToolButton { min-height: 40px; border: 1px solid #2e333b; border-radius: 8px; padding: 0 14px; background-color: #1f2329; color: #e4e7eb; font-size: 10.5pt; font-weight: 500; }"
             "QToolButton:hover { background-color: #262b32; border-color: #9aa1ab; }"
             "QToolButton:pressed { background-color: #2e333b; border-color: #454c57; }"
-            "QToolButton:disabled { background-color: #2a1d20; border-color: #3b2a2e; color: #7a6a6d; }"
+            # Unavailable buttons recede into the toolbar; the E-Stop lock keeps its red tint.
+            "QToolButton:disabled { background-color: #1a1d22; border-color: #262a31; color: #5c626b; }"
+            "QToolBar[emergencyStop=\"true\"] QToolButton:disabled { background-color: #2a1d20; border-color: #3b2a2e; color: #7a6a6d; }"
         )
         action_specs = (
             ("Run", self.start_process, "run", "#6fbf98"),
@@ -914,6 +916,8 @@ class OvenWindow(QtWidgets.QMainWindow):
             action = QtGui.QAction(label, self)
             if label == "Run":
                 self.run_action = action
+            elif label == "Stop":
+                self.stop_action = action
             elif label == "Reset":
                 self.reset_action = action
             action.setIcon(self._toolbar_icon(icon_name, accent))
@@ -999,7 +1003,7 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.manual_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         self.manual_button.setMenu(self.manual_menu)
         self.manual_button.setToolTip("Open door, close door, test the buzzer and lights, or control the heater")
-        toolbar.addWidget(self.manual_button)
+        self.manual_controls_action = toolbar.addWidget(self.manual_button)
 
         # Fullscreen has no title bar, so the window controls sit at the toolbar's right edge.
         spacer = QtWidgets.QWidget(self)
@@ -1844,6 +1848,10 @@ class OvenWindow(QtWidgets.QMainWindow):
             widget.setProperty("emergencyStop", active)
             widget.style().unpolish(widget)
             widget.style().polish(widget)
+        # The toolbar buttons' disabled look depends on the toolbar's property.
+        for button in self.process_toolbar.findChildren(QtWidgets.QToolButton):
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     def start_process(self) -> None:
         self._clear_temperature_markers()

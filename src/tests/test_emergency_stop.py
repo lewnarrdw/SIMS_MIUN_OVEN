@@ -339,7 +339,9 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.set_view(state="ready", estop_active=False)
 
         self.assertTrue(self.window.estop_banner.isHidden())
-        self.assertTrue(all(self.toolbar_actions_enabled()))
+        # Stop stays dimmed in Ready: there is no run or manual heating to stop.
+        self.assertEqual([action for action in self.window.process_toolbar.actions() if not action.isEnabled()],
+                         [self.window.stop_action])
         self.assertTrue(self.window.controls_box.isEnabled())
 
     def test_cleared_estop_restores_controls(self) -> None:
