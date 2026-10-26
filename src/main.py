@@ -83,12 +83,11 @@ class KilnWindow(gui.OvenWindow):
         self.service.command(name)
 
     def _update_toolbar_actions(self, view):
-        """Dim Run, Stop, Reset and Manual controls when the worker would refuse them."""
+        """Dim Run, Stop and Manual controls when the worker would refuse them."""
         if self._emergency_stop_shown is not None:
             return  # The E-Stop lock owns the toolbar until it is released.
         heater_on = (getattr(view, "output_percent", 0.0) or 0.0) > 0.0
         self.run_action.setEnabled(not view.running)
-        self.reset_action.setEnabled(not view.running)
         # Outside a run, Stop still turns off manual heating.
         self.stop_action.setEnabled(view.running or heater_on)
         self.manual_controls_action.setEnabled(not view.running)
@@ -126,13 +125,6 @@ class KilnWindow(gui.OvenWindow):
         self.duty_curve.setData([], [])
         self.goal_curve.setData([], [])
         self.planned_curve.setData([], [])
-
-    def reset_process(self):
-        self._historical_record = None
-        self._clear_temperature_markers()
-        self._markers_run.clear()
-        self.service.command("reset")
-        self._update_profile_preview()
 
     def refresh(self):
         live_view, live_samples = self.service.snapshot()
@@ -188,6 +180,7 @@ class KilnWindow(gui.OvenWindow):
             x_min, x_max = self.graph_item.vb.viewRange()[0]
             target_c = samples[-1]["target_temperature_c"]
             self.goal_curve.setData([x_min, x_max], [target_c, target_c])
+            self.planned_curve.setData([], [])
             self.duty_curve.setData(times, [row["heater_output_percent"] for row in samples])
             if self._historical_record is not None:
                 end_s = self._historical_record["result"]["duration_s"]
@@ -198,6 +191,8 @@ class KilnWindow(gui.OvenWindow):
             self.temperature_curve.setData([], [])
             self.goal_curve.setData([], [])
             self.duty_curve.setData([], [])
+            # With no run data, show the planned target; redrawn every refresh so it cannot go missing.
+            self._update_profile_preview()
         state = view.state
         self.run_action.setText("Run")
         can_start = getattr(live_view, "can_start", True)
@@ -245,7 +240,7 @@ class KilnWindow(gui.OvenWindow):
                 stage_detail = f"Average error: {sum(errors) / len(errors):.2f} °C"
         show_fault = state == "fault" and bool(view.detail)
         if show_fault:
-            next_step = "Fix it, then press Reset." if view.detail in LATCHED_FAULTS else "Fix it to continue."
+            next_step = "Fix it, then start a new run." if view.detail in LATCHED_FAULTS else "Fix it to continue."
             stage_detail = f"Cause: {describe_fault(view.detail)}. {next_step}"
         if show_fault != self._stage_detail_shows_fault:
             self._stage_detail_shows_fault = show_fault

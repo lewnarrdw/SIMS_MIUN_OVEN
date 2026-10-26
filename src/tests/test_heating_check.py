@@ -101,6 +101,30 @@ class HeatingCheckControllerTests(unittest.TestCase):
         self.assertLess(self.hardware.heater.percent, config.HEATING_CHECK_OUTPUT_PERCENT)
         self.assertEqual(self.controller.state, State.HEATING)
 
+    def test_start_clears_the_latched_heater_fault(self) -> None:
+        self.run_warm_up(22.0, 0.0, WINDOW_S + 1)
+        self.assertEqual(self.controller.state, State.FAULT)
+
+        self.controller.start(WINDOW_S + 2, 40.0, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD), 22.0)
+
+        self.assertEqual(self.controller.state, State.HEATING)
+        self.assertEqual(self.controller.fault_reason, "")
+
+    def test_start_refuses_a_fault_that_is_not_latched(self) -> None:
+        self.controller.fault("door_motor_timeout")
+
+        with self.assertRaises(RuntimeError):
+            self.controller.start(0.0, 40.0, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD), 22.0)
+        self.assertEqual(self.controller.state, State.FAULT)
+
+    def test_failed_start_keeps_the_latched_fault(self) -> None:
+        self.run_warm_up(22.0, 0.0, WINDOW_S + 1)
+
+        with self.assertRaises(RuntimeError):
+            self.controller.start(WINDOW_S + 2, 40.0, 60.0, (config.PID_KP, config.PID_KI, config.PID_KD), None)
+        self.assertEqual(self.controller.state, State.FAULT)
+        self.assertEqual(self.controller.fault_reason, "heater_not_heating")
+
     def test_new_run_starts_a_fresh_check(self) -> None:
         self.run_warm_up(22.0, 0.0, WINDOW_S - 2)
         self.controller.stop(WINDOW_S - 1)
@@ -131,7 +155,7 @@ class HeatingCheckApplicationTests(unittest.TestCase):
     def state(self) -> str:
         return self.app.snapshot()[0].state
 
-    def test_heater_fault_stays_latched_until_reset(self) -> None:
+    def test_heater_fault_stays_latched_until_a_new_run(self) -> None:
         self.app.command("start")
 
         self.assertTrue(wait_for(lambda: self.state() == "fault"))
@@ -140,10 +164,42 @@ class HeatingCheckApplicationTests(unittest.TestCase):
         faulted = [event for event in self.app.snapshot()[0].events if event["type"] == "run_faulted"]
         self.assertEqual(len(faulted), 1)
         self.assertIn("temperature did not rise while heating", faulted[0]["description"])
+        self.assertTrue(self.app.snapshot()[0].can_start)
 
-        self.app.command("reset")
+        self.app.command("start")
 
-        self.assertTrue(wait_for(lambda: self.state() == "ready"))
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
+        self.assertFalse(self.hardware.heater.locked)
+
+    def enter_heater_fault(self) -> None:
+        self.app.command("start")
+        self.assertTrue(wait_for(lambda: self.state() == "fault"))
+        self.assertEqual(self.app.snapshot()[0].detail, "heater_not_heating")
+
+    def rejected_starts(self) -> list[dict]:
+        return [event for event in self.app.snapshot()[0].events if event["type"] == "command_rejected"]
+
+    def test_start_cannot_clear_the_fault_while_a_live_condition_remains(self) -> None:
+        self.enter_heater_fault()
+        self.hardware.sensor.seconds_since_valid = lambda now: config.SENSOR_FAULT_TIMEOUT_S + 1.0
+        self.assertTrue(wait_for(lambda: not self.app.snapshot()[0].can_start))
+        self.assertEqual(self.app.snapshot()[0].ready_reason, "Temperature sensor is not responding")
+
+        self.app.command("start")
+
+        self.assertTrue(wait_for(lambda: len(self.rejected_starts()) == 1))
+        self.assertEqual(self.state(), "fault")
+        self.assertEqual(self.app.snapshot()[0].detail, "heater_not_heating")
+        self.assertTrue(self.hardware.heater.locked)
+
+    def test_heater_on_does_not_clear_the_fault(self) -> None:
+        self.enter_heater_fault()
+
+        self.app.command("heater_on")
+
+        self.assertTrue(wait_for(lambda: len(self.rejected_starts()) == 1))
+        self.assertEqual(self.state(), "fault")
+        self.assertEqual(self.hardware.heater.percent, 0.0)
 
     def test_manual_heating_faults_on_over_temperature(self) -> None:
         self.app.command("heater_on")
@@ -181,7 +237,7 @@ class HeatingFaultPanelTests(unittest.TestCase):
         self.window.close()
         self.window.deleteLater()
 
-    def test_heater_fault_asks_for_reset(self) -> None:
+    def test_heater_fault_asks_for_a_new_run(self) -> None:
         self.service.view = replace(self.service.view, state="fault", detail="heater_not_heating")
 
         self.window.refresh()
@@ -189,7 +245,7 @@ class HeatingFaultPanelTests(unittest.TestCase):
         self.assertEqual(
             self.window.stage_detail_label.text(),
             "Cause: Temperature did not rise while heating (check the heater and temperature probe). "
-            "Fix it, then press Reset.",
+            "Fix it, then start a new run.",
         )
 
 

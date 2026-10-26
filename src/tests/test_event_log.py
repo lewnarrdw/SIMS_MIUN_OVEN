@@ -226,20 +226,6 @@ class EventLogTests(unittest.TestCase):
         self.assertEqual(self.state(), "cooling")
         self.assertEqual(self.app.snapshot()[0].ready_reason, "Wait for the cool-down to finish")
 
-    def test_reset_keeps_the_fault_history(self) -> None:
-        self.start_run()
-        self.app.controller.heat_check_since = None
-        self.hardware.sensor.temperature_c = 60.0
-        self.wait_for_event("run_faulted")
-        self.hardware.sensor.temperature_c = 22.0
-        self.wait_for_event("fault_cleared")
-
-        self.app.command("reset")
-
-        reset = self.wait_for_event("reset")[0]
-        self.assertIn("run_faulted", [event["type"] for event in self.events()])
-        self.assertNotIn("run_elapsed_s", reset)
-
     def test_door_between_limit_switches_is_its_own_event(self) -> None:
         self.hardware.door_closed.is_active = False
 

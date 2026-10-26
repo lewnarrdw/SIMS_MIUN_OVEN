@@ -910,7 +910,6 @@ class OvenWindow(QtWidgets.QMainWindow):
         action_specs = (
             ("Run", self.start_process, "run", "#6fbf98"),
             ("Stop", self.stop_process, "stop", "#b8423a"),
-            ("Reset", self.reset_process, "reset", "#e8b33d"),
         )
         for label, callback, icon_name, accent in action_specs:
             action = QtGui.QAction(label, self)
@@ -918,8 +917,6 @@ class OvenWindow(QtWidgets.QMainWindow):
                 self.run_action = action
             elif label == "Stop":
                 self.stop_action = action
-            elif label == "Reset":
-                self.reset_action = action
             action.setIcon(self._toolbar_icon(icon_name, accent))
             action.setToolTip({
                 "Import": "Import process settings",
@@ -1045,19 +1042,6 @@ class OvenWindow(QtWidgets.QMainWindow):
         elif symbol == "stop":
             painter.setBrush(QtGui.QColor(accent))
             painter.drawRoundedRect(QtCore.QRectF(6, 6, 12, 12), 2, 2)
-        elif symbol == "reset":
-            # Familiar reset glyph: an open counterclockwise loop with an arrowhead.
-            arc = QtGui.QPainterPath(QtCore.QPointF(7, 6))
-            arc.cubicTo(QtCore.QPointF(9, 4.5), QtCore.QPointF(11, 4), QtCore.QPointF(12, 4))
-            arc.cubicTo(QtCore.QPointF(16.5, 4), QtCore.QPointF(20, 7.5), QtCore.QPointF(20, 12))
-            arc.cubicTo(QtCore.QPointF(20, 16.5), QtCore.QPointF(16.5, 20), QtCore.QPointF(12, 20))
-            arc.cubicTo(QtCore.QPointF(7.5, 20), QtCore.QPointF(4, 16.5), QtCore.QPointF(4, 12))
-            painter.drawPath(arc)
-            painter.setPen(QtCore.Qt.PenStyle.NoPen)
-            painter.setBrush(QtGui.QColor(accent))
-            painter.drawPolygon(QtGui.QPolygonF((
-                QtCore.QPointF(4, 4), QtCore.QPointF(4, 11), QtCore.QPointF(10, 7),
-            )))
         elif symbol in ("import_settings", "export_settings"):
             # Compact control sliders paired with the transfer direction.
             direction = "import" if symbol == "import_settings" else "export"
@@ -1861,9 +1845,6 @@ class OvenWindow(QtWidgets.QMainWindow):
 
     def manual_command(self, name: str) -> None:
         del name
-
-    def reset_process(self) -> None:
-        pass
 
     def import_run(self) -> None:
         pass

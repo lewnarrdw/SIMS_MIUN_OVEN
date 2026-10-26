@@ -154,7 +154,7 @@ class WindowControlTests(unittest.TestCase):
 
     def test_window_control_borders_match_toolbar_buttons(self) -> None:
         self.window.show()
-        reference = self.window.process_toolbar.widgetForAction(self.window.reset_action)
+        reference = self.window.process_toolbar.widgetForAction(self.window.event_log_action)
         expected = {}
         for state in ("rest", "hover", "pressed"):
             reference.setAttribute(QtCore.Qt.WidgetAttribute.WA_UnderMouse, state != "rest")

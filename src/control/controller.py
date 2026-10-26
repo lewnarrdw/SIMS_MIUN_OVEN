@@ -6,6 +6,9 @@ from .safety import SafetyMonitor
 from hardware.sensors import DoorState
 from peak_tracking import PeakTracker
 
+# Faults with no live condition to re-check: they stay until the operator starts a new run.
+LATCHED_FAULTS = frozenset({"heater_not_heating"})
+
 class State(Enum):
     READY = "ready"
     DOOR_MOVING = "door_moving"
@@ -48,7 +51,9 @@ class Controller:
     def active(self): return self.state in (State.DOOR_MOVING, State.HEATING, State.HOLDING, State.COOLING)
     def start(self, now, target, hold_s, gains, temperature):
         if self.active: return
-        if self.state not in (State.READY, State.COMPLETE, State.ABORTED): raise RuntimeError("Resolve the safety condition before starting another run")
+        latched = self.state == State.FAULT and self.fault_reason in LATCHED_FAULTS
+        if self.state not in (State.READY, State.COMPLETE, State.ABORTED) and not latched:
+            raise RuntimeError("Resolve the safety condition before starting another run")
         if temperature is None: raise RuntimeError("Waiting for a valid temperature reading")
         self.target = self.safety.validate_setpoint(target)
         self.hold_s = min(self.config.HOLD_DURATION_MAX_S, max(self.config.HOLD_DURATION_MIN_S, float(hold_s)))
@@ -106,14 +111,6 @@ class Controller:
         self.hw.heater.off(); self.hw.motor.stop()
         self.fault_reason = reason
         self._set_state(State.E_STOP, "Emergency stop")
-    def reset(self, now, temperature, age_s, estop):
-        if self.active: raise RuntimeError("Stop or finish the active run before resetting")
-        fault = self.safety.check(temperature, age_s, self.hw.switches.state(), self.hw.motor.fault_reason, False, estop)
-        if estop or fault in ("sensor_timeout", "sensor_invalid", "over_temperature", "door_error"):
-            raise RuntimeError(f"Cannot reset while safety condition remains: {fault or 'emergency stop'}")
-        self.hw.motor.clear_fault(); self.hw.heater.unlock(); self.hw.heater.off()
-        self.fault_reason = ""; self.run_started = None; self.run_ended = None; self.hold_completed = False; self.completion_allowed = True
-        self._set_state(State.READY, "Ready to run")
     def release_emergency_stop(self):
         """Clear only the E-Stop latch after the physical circuit is released."""
         self._clear_safety_latch(State.E_STOP)

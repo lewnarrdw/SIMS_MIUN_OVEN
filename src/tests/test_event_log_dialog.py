@@ -142,7 +142,7 @@ class EventLogDialogTests(unittest.TestCase):
     def test_only_run_end_and_recovery_events_are_success(self) -> None:
         for event_type in ("run_completed", "fault_cleared", "estop_released"):
             self.assertEqual(event_log.event_level({"type": event_type}), "success")
-        for event_type in ("stage_completed", "door_closed", "run_started", "reset"):
+        for event_type in ("stage_completed", "door_closed", "run_started"):
             self.assertEqual(event_log.event_level({"type": event_type}), "info")
 
     def test_success_events_do_not_raise_the_attention_badge(self) -> None:

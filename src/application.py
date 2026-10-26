@@ -7,7 +7,7 @@ from queue import Empty, SimpleQueue
 import threading
 import time
 
-from control.controller import Controller, State
+from control.controller import LATCHED_FAULTS, Controller, State
 from hardware.actuators import light_test_steps
 from hardware.factory import create_hardware
 from data_manager import DataManager
@@ -51,7 +51,7 @@ class ViewState:
 
 MAX_EVENTS = 1000
 COMMAND_LABELS = {
-    "start": "Start", "stop": "Stop", "reset": "Reset", "open": "Open door",
+    "start": "Start", "stop": "Stop", "open": "Open door",
     "close": "Close door", "heater_on": "Heater on", "heater_off": "Heater off",
     "test_buzzer": "Buzzer test", "defaults": "Restore defaults", "settings": "Settings",
     "tune": "PID tuning", "test_lights": "Light tower test",
@@ -71,8 +71,6 @@ FAULT_DESCRIPTIONS = {
     "door_not_in_position": "Door stopped away from its expected position",
     "heater_not_heating": "Temperature did not rise while heating (check the heater and temperature probe)",
 }
-# Faults with no live condition to re-check stay latched until the operator presses Reset.
-LATCHED_FAULTS = frozenset({"heater_not_heating"})
 DOOR_EVENTS = {
     "open": ("door_opened", "Door open"),
     "closed": ("door_closed", "Door closed"),
@@ -178,7 +176,7 @@ class Application:
         wall_time = datetime.fromtimestamp(time.time() - (monotonic_now - moment)).astimezone()
         event = {"elapsed_s": round(self._event_elapsed(now), 3), "type": event_type,
                  "description": description, "time": wall_time.isoformat(timespec="milliseconds")}
-        # Run time is only meaningful from a run start until the next reset.
+        # Run time is only meaningful from a run start onwards.
         if self._run_clock_active:
             event["run_elapsed_s"] = event["elapsed_s"]
         event.update(details)
@@ -240,7 +238,9 @@ class Application:
     def _publish(self, error=""):
         fields = self.controller.snapshot_fields()
         state = self.controller.state
-        allowed_state = state in (State.READY, State.COMPLETE, State.ABORTED)
+        # A latched fault is cleared by starting a new run, so it does not block Run.
+        allowed_state = (state in (State.READY, State.COMPLETE, State.ABORTED)
+                         or (state == State.FAULT and self.controller.fault_reason in LATCHED_FAULTS))
         reason = ""
         if not allowed_state:
             reason = "Release the E-Stop before starting" if state == State.E_STOP else (
@@ -312,6 +312,12 @@ class Application:
             self._error = f"Run auto-save failed: {exc}"
             self._view = replace(self._view, error=self._error)
 
+    def _only_latched_fault(self, temperature, age):
+        """True when the fault is latched and no live safety condition remains."""
+        return (self.controller.fault_reason in LATCHED_FAULTS
+                and not self._estop_active
+                and not self.controller.safety.check(
+                    temperature, age, self.hw.switches.state(), self.hw.motor.fault_reason, False, False))
     def _apply_commands(self, now, temperature, age):
         while True:
             try: name, value = self.commands.get_nowait()
@@ -321,8 +327,10 @@ class Application:
                         and name in ("start", "open", "close", "heater_on")):
                     raise RuntimeError("Emergency stop is active; release it before using the heater or door")
                 # The door stays usable during a fault so the operator can test or reposition it.
+                # Starting a new run clears a latched fault, but only with no live safety condition.
                 if (self.controller.state == State.FAULT
-                        and name in ("start", "heater_on")):
+                        and name in ("start", "heater_on")
+                        and not (name == "start" and self._only_latched_fault(temperature, age))):
                     raise RuntimeError("Safety fault is active; resolve it before starting or heating")
                 if name == "start":
                     if self.controller.active:
@@ -373,16 +381,6 @@ class Application:
                                           stopped_during=old_state.value)
                 elif name == "emergency":
                     self._enter_emergency_stop(now, value)
-                elif name == "reset":
-                    self._manual_override_active = False
-                    self.controller.reset(now, temperature, age, self.hw.estop())
-                    self._flush_pid_event()
-                    # Keep the log so the fault that led to the reset can still be read.
-                    self._run_clock_active = False
-                    with self._lock:
-                        self.samples.clear()
-                        self._error = ""
-                    self._append_event("reset", "Process reset", now)
                 elif name == "defaults":
                     if self.controller.active: raise RuntimeError("Settings cannot be imported during an active run")
                     self._start_settings = dict(value)

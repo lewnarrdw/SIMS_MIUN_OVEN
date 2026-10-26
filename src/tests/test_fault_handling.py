@@ -65,8 +65,8 @@ class FaultHandlingTests(unittest.TestCase):
         self.assertEqual(self.state(), "fault")
         self.assertEqual(self.detail(), "heater_not_heating")
         self.assertFalse(wait_for(lambda: self.state() != "fault", timeout_s=0.5))
-        self.app.command("reset")
-        self.assertTrue(wait_for(lambda: self.state() == "ready"))
+        self.app.command("start")
+        self.assertTrue(wait_for(lambda: self.state() == "heating"))
 
     def test_estop_does_not_clear_a_door_position_fault(self) -> None:
         self.enter_door_timeout_fault()

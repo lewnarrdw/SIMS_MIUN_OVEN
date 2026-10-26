@@ -218,17 +218,13 @@ class ApplicationEmergencyStopTests(unittest.TestCase):
 
         self.assertTrue(wait_for(lambda: self.state() == "e_stop"))
 
-    def test_door_commands_rejected_until_estop_reset(self) -> None:
+    def test_door_commands_rejected_until_estop_released(self) -> None:
         self.hardware.estop_engaged = True
         self.assertTrue(wait_for(lambda: self.state() == "e_stop"))
 
         self.app.command("open")
         self.assertTrue(wait_for(lambda: "Emergency stop is active" in self.app.snapshot()[0].error))
         self.assertEqual(self.hardware.motor.state.value, "idle")
-
-        self.app.command("reset")
-        self.assertTrue(wait_for(lambda: "Cannot reset" in self.app.snapshot()[0].error))
-        self.assertEqual(self.state(), "e_stop")
 
         self.hardware.estop_engaged = False
         self.assertTrue(wait_for(lambda: self.state() == "ready"))
@@ -375,7 +371,7 @@ class EmergencyStopWindowTests(unittest.TestCase):
         self.set_view(state="fault", detail="sensor_timeout")
 
         self.assertEqual(self.window.stage_detail_label.text(),
-                         "Cause: Temperature sensor is not responding. Fix it, then press Reset.")
+                         "Cause: Temperature sensor is not responding. Fix it to continue.")
         self.assertIn("#ff8a80", self.window.stage_detail_label.styleSheet())
 
     def test_fault_cause_clears_after_reset(self) -> None:
