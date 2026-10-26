@@ -20,7 +20,7 @@ DOOR_TIMEOUT_S = 10.0
 # All_pinnar.docx: the single-light tests on the Pi showed red on GPIO17, yellow on GPIO22.
 TOWER_PINS = {"red": 17, "orange": 24, "yellow": 22, "green": 23, "buzzer": 27}
 TOWER_LIGHTS = ("red", "orange", "yellow", "green")  # Top to bottom
-BUZZER_TEST_S = 1.0  # How long Manual controls > Test buzzer sounds the buzzer
+BUZZER_TEST_S = 10.0  # How long Manual controls > Test buzzer sounds the buzzer
 LIGHT_TEST_STEP_S = 0.6  # Pace of Manual controls > Light tower > Test all lights
 SINGLE_LIGHT_TEST_S = 3.0  # How long a single-light test keeps its light on
 RELAY_ACTIVE_LOW = True
@@ -44,11 +44,12 @@ MAX_TEMPERATURE = 50.0
 DOOR_SAFE_TEMPERATURE = 30.0
 # Hold starts once the temperature has settled: over the last STABLE_TIME_S, the median
 # reading is within STABLE_TOLERANCE of the target and at least STABLE_IN_BAND_SHARE of
-# the readings are inside that band. Simulated on the fitted oven model (see the PID
-# note below), 120 s was the shortest window after which the temperature never left
-# the band again; 30-60 s windows started the hold while it was still drifting.
+# the readings are inside that band, so the hold starts about STABLE_TIME_S after the
+# temperature settles. On the first run with the tuned PID (kiln-run-20261026-123831)
+# the temperature entered the band at 249 s and never left it (max +0.07 °C); a 120 s
+# window held it back until 358 s, while 45 s starts the hold at about 290 s.
 STABLE_TOLERANCE = 0.1
-STABLE_TIME_S = 120.0
+STABLE_TIME_S = 45.0
 STABLE_IN_BAND_SHARE = 0.9
 HOLD_DURATION_MIN_S = 1.0
 HOLD_DURATION_MAX_S = 120.0
