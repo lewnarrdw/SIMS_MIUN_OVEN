@@ -273,12 +273,15 @@ class KilnWindow(gui.OvenWindow):
             self.statusBar().showMessage(view.error, 8000)
         self._update_attention_badge(view)
         terminal = view.state in ("complete", "aborted", "fault", "e_stop")
-        if terminal and view.hold_min_c is not None and "hold_low" not in self._markers_run:
-            self.show_hold_minimum_temperature_marker(view.hold_min_time_s, view.hold_min_c)
-            self._markers_run.add("hold_low")
-        if view.state == "complete" and view.peak_c is not None and "peak" not in self._markers_run:
-            self.show_peak_temperature_marker(view.peak_time_s, view.peak_c, view.target_c)
-            self._markers_run.add("peak")
+        if view.state == "complete" and "peak_error" not in self._markers_run:
+            error = gui.peak_error(
+                view.target_c,
+                None if view.peak_c is None else (view.peak_time_s, view.peak_c),
+                None if view.hold_min_c is None else (view.hold_min_time_s, view.hold_min_c),
+            )
+            if error is not None:
+                self.show_peak_error_marker(*error, view.target_c)
+            self._markers_run.add("peak_error")
         if view.hold_reached_s is not None and "hold_reached" not in self._markers_run:
             self._show_event_marker(view.hold_reached_s, "Hold reached", "#8fc5f5", samples)
             self._markers_run.add("hold_reached")

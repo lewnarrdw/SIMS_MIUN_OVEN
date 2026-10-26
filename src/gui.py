@@ -55,6 +55,32 @@ def door_status(door: str | None, motor: str | None = "idle") -> tuple[str, str]
     }.get(door or "", ("N/A", DOOR_UNKNOWN_COLOR))
 
 
+def peak_error(
+    target_c: float,
+    peak: tuple[float, float] | None,
+    hold_low: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    """Return (elapsed_s, temperature_c) of the larger deviation from the target.
+
+    peak and hold_low are (elapsed_s, temperature_c): the run's highest temperature
+    and the lowest during the hold. A peak below the target or a low above it is not
+    a deviation in its direction, so it does not count.
+    """
+    candidates = []
+    if peak is not None and peak[1] >= target_c:
+        candidates.append(peak)
+    if hold_low is not None and hold_low[1] <= target_c:
+        candidates.append(hold_low)
+    if not candidates:
+        candidates = [point for point in (peak, hold_low) if point is not None]
+    return max(candidates, key=lambda point: abs(point[1] - target_c), default=None)
+
+
+def format_error_c(error_c: float) -> str:
+    """Signed error vs target, with a true minus sign below it."""
+    return f"{'−' if error_c < 0 else '+'}{abs(error_c):.2f} °C"
+
+
 def hold_window_span(
     state: str,
     hold_reached_s: float | None,
@@ -1632,65 +1658,11 @@ class OvenWindow(QtWidgets.QMainWindow):
         if self.temperature_marker_items:
             self._layout_temperature_markers()
 
-    def show_peak_temperature_marker(
-        self,
-        peak_elapsed_s: float,
-        peak_temperature_c: float,
-        target_temperature_c: float,
-    ) -> None:
-        """Annotate the maximum temperature after a run completes."""
-        minutes, seconds = divmod(peak_elapsed_s, 60.0)
-        difference_c = peak_temperature_c - target_temperature_c
-        label = (
-            f"Peak {peak_temperature_c:.2f} °C at "
-            f"{int(minutes):02d}:{seconds:04.1f} "
-            f"({difference_c:+.2f} °C vs target)"
-        )
-        self._add_temperature_marker(peak_elapsed_s, peak_temperature_c, label, "#ffe680")
-
-    def show_hold_minimum_temperature_marker(
-        self,
-        minimum_elapsed_s: float,
-        minimum_temperature_c: float,
-    ) -> None:
-        """Annotate the lowest hold temperature once the hold stage ends.
-
-        Pass the time when that minimum was measured so the marker sits on
-        the corresponding point in the temperature curve.
-        """
-        minutes, seconds = divmod(minimum_elapsed_s, 60.0)
-        label = (
-            f"Hold low {minimum_temperature_c:.2f} °C at "
-            f"{int(minutes):02d}:{seconds:04.1f}"
-        )
-        self._add_temperature_marker(
-            minimum_elapsed_s,
-            minimum_temperature_c,
-            label,
-            "#7fb8ea",
-        )
-
-    def _on_hold_completed(
-        self,
-        minimum_elapsed_s: float,
-        minimum_temperature_c: float,
-    ) -> None:
-        """Hold-end marker call site for the future run-data integration."""
-        # self.show_hold_minimum_temperature_marker(
-        #     minimum_elapsed_s, minimum_temperature_c
-        # )
-        pass
-
-    def _on_process_completed(
-        self,
-        peak_elapsed_s: float,
-        peak_temperature_c: float,
-    ) -> None:
-        """Peak marker call site for a successfully completed run."""
-        # self.show_peak_temperature_marker(
-        #     peak_elapsed_s, peak_temperature_c, self.target_input.value()
-        # )
-        pass
+    def show_peak_error_marker(self, elapsed_s: float, temperature_c: float, target_c: float) -> None:
+        """Annotate the run's largest deviation from the target once it completes."""
+        minutes, seconds = divmod(elapsed_s, 60.0)
+        label = f"Peak error {format_error_c(temperature_c - target_c)} at {int(minutes):02d}:{seconds:04.1f}"
+        self._add_temperature_marker(elapsed_s, temperature_c, label, "#ffe680")
 
     def _resize_duty_view(self) -> None:
         self.duty_view.setGeometry(self.graph_item.vb.sceneBoundingRect())
@@ -1970,11 +1942,9 @@ def show_run_summary_preview(window: OvenWindow) -> None:
         window.duty_curve.setData(points, [max(0.0, 80.0 - index * 12.0) for index in range(len(points))])
         window._clear_temperature_markers()
         if name == "Completed":
-            window.show_hold_minimum_temperature_marker(low_s, low_c)
-            window.show_peak_temperature_marker(peak_s, peak_c, example["target"])
+            error_s, error_c = peak_error(example["target"], (peak_s, peak_c), (low_s, low_c))
+            window.show_peak_error_marker(error_s, error_c, example["target"])
         else:
-            if name == "Manually stopped":
-                window.show_hold_minimum_temperature_marker(low_s, low_c)
             window._add_temperature_marker(end_s, temperatures[-1], "Stopped", example["color"])
         window._set_graph_time_extent(end_s)
         window._set_graph_x_range(max(GRAPH_WINDOW_S, end_s))

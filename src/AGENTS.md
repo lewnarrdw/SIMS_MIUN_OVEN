@@ -35,7 +35,7 @@ All generated application code must run on 64-bit Raspberry Pi OS on a Raspberry
 
 Keep GPIO, I2C, SPI, PWM, and device imports behind a hardware interface selected at runtime. The Windows simulator must never import Pi-only packages; the Pi implementation must provide the same interface. Keep sensor reads, control loops, and blocking I/O off the Qt UI thread. Treat heater output as safety-critical: default to off on startup, stop, errors, and shutdown.
 
-For graph behavior, annotate the maximum measured temperature only after a run completes; keep completion summaries concise and do not show a peak marker during an active or aborted run.
+For graph behavior, annotate the peak error only after a run completes: the larger deviation from target of the run's peak (shown with +) and the hold stage's low (shown with −). Keep completion summaries concise and do not show this marker during an active or aborted run.
 
 ## Commit & Pull Request Guidelines
 
