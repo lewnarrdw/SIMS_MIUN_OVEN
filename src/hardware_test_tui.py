@@ -256,6 +256,21 @@ class PiDiagnostics:
             output.off()
             line(f"[SAFE] {name} signal off.")
 
+    def test_buzzer_low(self) -> None:
+        """Hold the buzzer's BCM GPIO27 signal LOW for a polarity check."""
+        output = self.outputs["Tower buzzer"]
+        line("[ACTION] Driving buzzer signal LOW for 1 second. Confirm the buzzer physically.")
+        try:
+            # The configured buzzer output is active-high, so gpiozero's logical
+            # off state drives the physical GPIO signal LOW.
+            output.off()
+            time.sleep(1.0)
+        except KeyboardInterrupt:
+            line("[STOP] Buzzer LOW test interrupted.")
+        finally:
+            output.off()
+            line("[SAFE] Buzzer signal remains LOW (its configured off state).")
+
     def test_heater(self) -> None:
         """Pulse the heater output briefly after checking basic interlocks."""
         if "Heater" not in self.outputs:
@@ -359,6 +374,7 @@ def show_page_two(hw: PiDiagnostics) -> str:
         line("10. Go to inputs / sensor page")
         line("11. Test door motor without a temperature sensor (E-STOP/limits/timeout remain active)")
         line("12. Manual door override (bypasses E-STOP, temperature, and limit inputs)")
+        line("13. Drive buzzer signal LOW for 1 second (polarity check)")
         line("0. Quit")
         choice = input("> ").strip()
         if choice == "1":
@@ -374,6 +390,9 @@ def show_page_two(hw: PiDiagnostics) -> str:
         elif choice in {"4", "5", "6", "7", "8"}:
             signal = {"4": "red", "5": "yellow", "6": "green", "7": "orange", "8": "buzzer"}[choice]
             hw.test_signal(signal)
+            pause()
+        elif choice == "13":
+            hw.test_buzzer_low()
             pause()
         elif choice == "9":
             hw.test_heater()

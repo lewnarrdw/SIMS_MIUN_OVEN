@@ -114,8 +114,11 @@ class TowerPolarityTests(unittest.TestCase):
         self.assertIs(self.device("red").kwargs["active_high"], True)
 
     def test_u23_outputs_are_driven_active_low(self) -> None:
-        for name in ("orange", "yellow", "green", "buzzer"):
+        for name in ("orange", "yellow", "green"):
             self.assertIs(self.device(name).kwargs["active_high"], False, name)
+
+    def test_buzzer_is_driven_active_high(self) -> None:
+        self.assertIs(self.device("buzzer").kwargs["active_high"], True)
 
     def test_every_tower_output_starts_off(self) -> None:
         for name in config.TOWER_PINS:

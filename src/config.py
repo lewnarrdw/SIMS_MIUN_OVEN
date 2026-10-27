@@ -20,18 +20,18 @@ DOOR_TIMEOUT_S = 10.0
 # All_pinnar.docx: the single-light tests on the Pi showed red on GPIO17, yellow on GPIO22.
 TOWER_PINS = {"red": 17, "orange": 24, "yellow": 22, "green": 23, "buzzer": 27}
 TOWER_LIGHTS = ("red", "orange", "yellow", "green")  # Top to bottom
-BUZZER_TEST_S = 10.0  # How long Manual controls > Test buzzer sounds the buzzer
+BUZZER_TEST_S = 1.0  # How long Manual controls > Test buzzer sounds the buzzer
 LIGHT_TEST_STEP_S = 0.6  # Pace of Manual controls > Light tower > Test all lights
 SINGLE_LIGHT_TEST_S = 3.0  # How long a single-light test keeps its light on
 RELAY_ACTIVE_LOW = True
 # Per-output polarity. GPIO17 (red) is on optoisolator U56 with the heater and door
 # motor, which are active-high; the other outputs are on U23 and switch on when LOW.
 # Driving red active-low lit it in Ready and turned it off during E-Stop.
-TOWER_ACTIVE_LOW = {"red": False, "orange": True, "yellow": True, "green": True, "buzzer": True}
+TOWER_ACTIVE_LOW = {"red": False, "orange": True, "yellow": True, "green": True, "buzzer": False}
 BUTTON_START_PIN = 13
-BUTTON_STOP_PIN = 21
-# The unpressed stop input reads LOW; HIGH means pressed.
-STOP_BUTTON_ACTIVE_LOW = False
+BUTTON_STOP_PIN = 4
+# The stop button is active-low: unpressed reads HIGH, pressed reads LOW.
+STOP_BUTTON_ACTIVE_LOW = True
 BUTTON_OPEN_PIN = 19
 BUTTON_CLOSE_PIN = 26
 ESTOP_SENSE_PIN = 25
