@@ -192,7 +192,11 @@ class SignalTower:
             lit = tower_lights(self.state, now, self.door_moving, self.hot)
         chirping = self.chirp_started is not None and any(
             start <= now - self.chirp_started < end for start, end in COMPLETE_CHIRPS)
-        if self.state in ALARM_STATES or self.buzzer_test_until is not None or chirping: lit.add("buzzer")
+        buzzer_on = self.state == "fault" or (
+            self.state != "e_stop"
+            and (self.buzzer_test_until is not None or chirping)
+        )
+        if buzzer_on: lit.add("buzzer")
         # Blinks refresh every few milliseconds; write the pins only when the pattern changes.
         if lit == self._shown: return
         self._shown = lit

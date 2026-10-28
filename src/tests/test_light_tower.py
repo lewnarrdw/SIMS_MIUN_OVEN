@@ -97,7 +97,7 @@ class SignalTowerLightTestTests(unittest.TestCase):
 
         tower.show("e_stop")
 
-        self.assertEqual(lit(tower), {"red", "buzzer"})
+        self.assertEqual(lit(tower), {"red"})
         tower.show("ready")
         self.assertEqual(lit(tower), {"green"})
 

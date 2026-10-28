@@ -51,14 +51,14 @@ class SignalTowerBuzzerTests(unittest.TestCase):
         tower.update(1.0)
         self.assertEqual(lit(tower), {"green"})
 
-    def test_buzzer_test_does_not_silence_an_alarm(self) -> None:
+    def test_e_stop_silences_buzzer_even_during_buzzer_test(self) -> None:
         tower = make_tower()
         tower.show("e_stop")
         tower.test_buzzer(0.0, 1.0)
 
         tower.update(2.0)
 
-        self.assertEqual(lit(tower), {"red", "buzzer"})
+        self.assertEqual(lit(tower), {"red"})
 
     def test_repeated_buzzer_test_restarts_the_duration(self) -> None:
         tower = make_tower()
