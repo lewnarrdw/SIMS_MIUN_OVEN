@@ -15,7 +15,8 @@ python main.py
 - Provides process controls for target temperature (30-60 C, 45 C default) and hold duration (1-120 seconds, 60 seconds default), plus editable PID gains (Kp 0.10, Ki 0.006, Kd 0.05).
 - Shows run stages, elapsed time, temperature/output, and door status. A stopped or interrupted run must be started over; safety faults clear when their underlying condition is resolved.
 - Supports importing and exporting run records and process settings, viewing run events, and restoring process or PID defaults.
-- Completed runs are saved as JSON in the configured data directory.
+- Completed runs are saved as CSV in the configured data directory. Export run saves CSV by default or JSON when chosen, and Import run reads either.
+- A run CSV has one row per sample, with the graph data in the leftmost columns (`elapsed_s`, `temperature_c`, `target_temperature_c`, `heater_output_percent`, `kp`, `ki`, `kd`). The run summary, event log and remaining run details follow in column groups to the right, each separated by an empty column and reading down from the first row.
 
 ## Hardware and control status
 

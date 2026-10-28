@@ -9,6 +9,8 @@
 - Add a graph marker at the end of the hold stage showing the lowest temperature measured during the hold.
 - Update `tests/test_graph_display.py` and `tests/test_settings_controls.py`: they import names that no longer exist in `main.py` (for example `DEFAULT_KD`) and fail during collection.
 - Set up the Git/GitHub workflow for creating scoped commits and pull requests, including a configured remote and authenticated GitHub CLI or equivalent.
+- Fix the failing `test_open_dialog_shows_new_live_events` in `tests/test_event_log_dialog.py`: the last row shows a "Cannot start" event instead of the new "Door open" event.
+- Run CSVs use commas and decimal points. Excel with a Swedish locale opens them in a single column; use Data > From Text/CSV, or decide whether a `;` export option is needed.
 - Review the temperature sampling rate, rolling median window, controller update rate, and graph/log sampling rate together; tune them for the MAX31865 and oven response.
 - On the Pi, check the door display during a fault: open the event log (it updates live) and compare its door events with the label and the real door. The software reads the limit switches every 67 ms in every state, so a mismatch would point at switch wiring, missing debounce, or the E-Stop cutting switch power.
 - Confirm the warm-up heating check thresholds (`HEATING_CHECK_*` in `config.py`) on the real oven: note the delay before the temperature starts rising at full output and keep the window above it.

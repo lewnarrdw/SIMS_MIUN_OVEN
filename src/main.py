@@ -13,6 +13,9 @@ from event_log import EventLogDialog, event_severity
 from run_summary import attach_summary, record_summary
 from run_summary_dialog import RunSummaryDialog
 
+RUN_CSV_FILTER = "CSV files (*.csv)"
+RUN_JSON_FILTER = "JSON files (*.json)"
+
 
 class KilnWindow(gui.OvenWindow):
     """Thin view adapter; device work stays in Application's worker."""
@@ -396,11 +399,12 @@ class KilnWindow(gui.OvenWindow):
             record = self.service.last_run_record or attach_summary(
                 DataManager.build_run_record(view, samples), config.STABLE_TOLERANCE)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export run",
-            self._in_data_folder(f"kiln-run-{stamp}.json"), "Kiln run (*.json)")
+        path, selected = QtWidgets.QFileDialog.getSaveFileName(self, "Export run",
+            self._in_data_folder(f"kiln-run-{stamp}.csv"), f"{RUN_CSV_FILTER};;{RUN_JSON_FILTER}")
         if path:
             try:
-                saved = self.data.export_run(record, path)
+                # A typed .csv or .json wins; otherwise the chosen file type decides.
+                saved = self.data.export_run(record, path, "json" if selected == RUN_JSON_FILTER else "csv")
                 self.statusBar().showMessage(f"Exported {saved}", 5000)
             except (OSError, ValueError) as exc:
                 self.statusBar().showMessage(str(exc), 8000)
@@ -411,7 +415,8 @@ class KilnWindow(gui.OvenWindow):
             self.statusBar().showMessage("Stop the active run before importing a run", 5000)
             return
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Import run", self._in_data_folder(), "Kiln run (*.json)"
+            self, "Import run", self._in_data_folder(),
+            f"Kiln run (*.csv *.json);;{RUN_CSV_FILTER};;{RUN_JSON_FILTER}"
         )
         if not path:
             return

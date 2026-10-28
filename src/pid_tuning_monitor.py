@@ -20,7 +20,7 @@ when the suggested gains stop changing).
 
 Run it by hand on saved runs as well:
 
-    python pid_tuning_monitor.py data/kiln-run-*.json
+    python pid_tuning_monitor.py data/kiln-run-*.csv
 """
 from __future__ import annotations
 
@@ -803,13 +803,17 @@ def main(argv: list[str]) -> int:
     """Analyse saved run files in order, as if each had just finished; print the reports."""
     paths = sorted({path for pattern in argv for path in (glob.glob(pattern) or [pattern])})
     if not paths:
-        print("Usage: python pid_tuning_monitor.py data/kiln-run-*.json")
+        print("Usage: python pid_tuning_monitor.py data/kiln-run-*.csv")
         return 2
     history: list[dict] = []
     for path in paths:
         try:
-            record = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
+            if Path(path).suffix.lower() == ".csv":
+                from data_manager import DataManager  # Only the CLI reads CSV runs.
+                record = DataManager.import_run(path)
+            else:
+                record = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
             print(f"Skipping {path}: {exc}")
             continue
         report, entry, _suggestion = analyse(record, history)
