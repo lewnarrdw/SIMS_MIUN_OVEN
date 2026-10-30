@@ -1,5 +1,7 @@
 """Validated operating limits and Raspberry Pi pin configuration."""
 
+from pathlib import Path
+
 TEMP_CS_PIN = 18  # MAX31865 software chip select; keep SPI CE0/CE1 pins free.
 RTD_NOMINAL = 100.0
 RTD_REF_RESISTOR = 430.0
@@ -78,7 +80,8 @@ PID_INTEGRAL_ZONE_C = 1.0
 ROOM_TEMPERATURE = 20.0
 # Steady output per °C above room temperature: 1 / 0.47 °C per % from the fit above.
 FF_PERCENT_PER_DEGREE = 2.1
-DATA_DIRECTORY = "data"
+# Next to the program, not wherever it was started from (e.g. ~ when launched from a shortcut).
+DATA_DIRECTORY = str(Path(__file__).resolve().parent / "data")
 # Minimise button: None shows it only when a desktop session (with a taskbar) can
 # restore the window; True or False forces it. A kiosk-started Pi has no way back.
 SHOW_MINIMIZE_BUTTON = None

@@ -15,7 +15,7 @@ from PySide6 import QtWidgets
 import config
 import gui
 from data_manager import DataManager
-from main import KilnWindow
+from main import RUN_CSV_FILTER, RUN_JSON_FILTER, KilnWindow, with_run_suffix
 from run_summary import attach_summary, record_summary, summarize
 from tests.test_run_summary import completed_record
 from tests.test_toolbar_availability import SampleService
@@ -161,6 +161,26 @@ class RunCsvTests(unittest.TestCase):
             DataManager.import_run(path)
 
 
+class RunSuffixTests(unittest.TestCase):
+    def test_the_ending_follows_the_file_type(self) -> None:
+        self.assertEqual(with_run_suffix("test.csv", RUN_JSON_FILTER), "test.json")
+        self.assertEqual(with_run_suffix("test.json", RUN_CSV_FILTER), "test.csv")
+
+    def test_a_matching_ending_is_kept(self) -> None:
+        self.assertEqual(with_run_suffix("test.csv", RUN_CSV_FILTER), "test.csv")
+
+    def test_an_upper_case_ending_is_swapped(self) -> None:
+        self.assertEqual(with_run_suffix("TEST.CSV", RUN_JSON_FILTER), "TEST.json")
+
+    def test_only_the_last_ending_is_swapped(self) -> None:
+        self.assertEqual(with_run_suffix("run.v2.csv", RUN_JSON_FILTER), "run.v2.json")
+
+    def test_other_names_are_kept(self) -> None:
+        self.assertEqual(with_run_suffix("test", RUN_JSON_FILTER), "test")
+        self.assertEqual(with_run_suffix("test.txt", RUN_JSON_FILTER), "test.txt")
+        self.assertEqual(with_run_suffix("", RUN_JSON_FILTER), "")
+
+
 class RunExportDialogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -180,16 +200,45 @@ class RunExportDialogTests(unittest.TestCase):
         self.directory.cleanup()
 
     def export(self, name: str, selected_filter: str) -> mock.MagicMock:
-        with mock.patch.object(QtWidgets.QFileDialog, "getSaveFileName",
-                               return_value=(str(self.folder / name), selected_filter)) as dialog:
+        with mock.patch.object(self.window, "_ask_run_export_path",
+                               return_value=(str(self.folder / name), selected_filter)) as ask:
             self.window.export_run_data()
+        return ask
+
+    def dialog(self, name: str) -> QtWidgets.QFileDialog:
+        dialog = self.window._run_export_dialog(str(self.folder / name))
+        self.addCleanup(dialog.deleteLater)
         return dialog
 
-    def test_csv_is_the_suggested_file_type(self) -> None:
-        dialog = self.export("", "")
+    def chosen_name(self, dialog: QtWidgets.QFileDialog) -> str:
+        return Path(dialog.selectedFiles()[0]).name
 
-        self.assertTrue(dialog.call_args.args[2].endswith(".csv"))
-        self.assertTrue(dialog.call_args.args[3].startswith("CSV"))
+    def test_csv_is_the_suggested_file_type(self) -> None:
+        ask = self.export("", "")
+
+        self.assertTrue(ask.call_args.args[0].endswith(".csv"))
+        self.assertEqual(self.dialog("run.csv").nameFilters(), [RUN_CSV_FILTER, RUN_JSON_FILTER])
+
+    def test_choosing_json_renames_a_csv_file(self) -> None:
+        dialog = self.dialog("test.csv")
+
+        dialog.filterSelected.emit(RUN_JSON_FILTER)
+
+        self.assertEqual(self.chosen_name(dialog), "test.json")
+
+    def test_choosing_csv_renames_a_json_file(self) -> None:
+        dialog = self.dialog("test.json")
+
+        dialog.filterSelected.emit(RUN_CSV_FILTER)
+
+        self.assertEqual(self.chosen_name(dialog), "test.csv")
+
+    def test_a_name_without_a_run_ending_is_kept(self) -> None:
+        dialog = self.dialog("test")
+
+        dialog.filterSelected.emit(RUN_JSON_FILTER)
+
+        self.assertEqual(self.chosen_name(dialog), "test")
 
     def test_the_json_file_type_saves_json(self) -> None:
         self.export("run", "JSON files (*.json)")
@@ -272,10 +321,21 @@ class DataFolderTests(unittest.TestCase):
     def test_export_run_suggests_a_file_in_the_data_folder(self) -> None:
         self.window._historical_record = completed_record()
 
-        suggested = self.start_folder("getSaveFileName", self.window.export_run_data)
+        with mock.patch.object(self.window, "_ask_run_export_path", return_value=("", "")) as ask:
+            self.window.export_run_data()
+        suggested = Path(ask.call_args.args[0])
 
         self.assertEqual(suggested.parent, self.folder.resolve())
         self.assertTrue(suggested.name.startswith("kiln-run-"))
+
+    def test_the_data_folder_is_next_to_the_program(self) -> None:
+        program_folder = Path(__file__).resolve().parent.parent
+        started_from = os.getcwd()
+        try:
+            os.chdir(self.directory.name)  # As when the app is started from ~
+            self.assertEqual(Path(config.DATA_DIRECTORY).resolve(), program_folder / "data")
+        finally:
+            os.chdir(started_from)
 
     def test_missing_data_folder_is_created(self) -> None:
         self.assertFalse(self.folder.exists())

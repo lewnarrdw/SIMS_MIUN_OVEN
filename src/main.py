@@ -3,6 +3,7 @@ from __future__ import annotations
 import signal
 import sys
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from PySide6 import QtCore, QtGui, QtWidgets
 import config
@@ -15,6 +16,14 @@ from run_summary_dialog import RunSummaryDialog
 
 RUN_CSV_FILTER = "CSV files (*.csv)"
 RUN_JSON_FILTER = "JSON files (*.json)"
+
+
+def with_run_suffix(path: str, name_filter: str) -> str:
+    """Swap a .csv or .json ending for the chosen file type's; other names stay as typed."""
+    name = Path(path)
+    if name.suffix.lower() not in (".csv", ".json"):
+        return path
+    return str(name.with_suffix(".json" if name_filter == RUN_JSON_FILTER else ".csv"))
 
 
 class KilnWindow(gui.OvenWindow):
@@ -399,8 +408,7 @@ class KilnWindow(gui.OvenWindow):
             record = self.service.last_run_record or attach_summary(
                 DataManager.build_run_record(view, samples), config.STABLE_TOLERANCE)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path, selected = QtWidgets.QFileDialog.getSaveFileName(self, "Export run",
-            self._in_data_folder(f"kiln-run-{stamp}.csv"), f"{RUN_CSV_FILTER};;{RUN_JSON_FILTER}")
+        path, selected = self._ask_run_export_path(self._in_data_folder(f"kiln-run-{stamp}.csv"))
         if path:
             try:
                 # A typed .csv or .json wins; otherwise the chosen file type decides.
@@ -408,6 +416,31 @@ class KilnWindow(gui.OvenWindow):
                 self.statusBar().showMessage(f"Exported {saved}", 5000)
             except (OSError, ValueError) as exc:
                 self.statusBar().showMessage(str(exc), 8000)
+
+    def _run_export_dialog(self, suggested):
+        """A save dialog whose file name follows the chosen file type, e.g. test.csv -> test.json."""
+        dialog = QtWidgets.QFileDialog(self, "Export run")
+        dialog.setAcceptMode(QtWidgets.QFileDialog.AcceptMode.AcceptSave)
+        dialog.setNameFilters([RUN_CSV_FILTER, RUN_JSON_FILTER])
+        dialog.selectFile(suggested)
+
+        def follow_file_type(name_filter):
+            # The Pi's GTK dialog keeps the typed ending when the file type changes.
+            files = dialog.selectedFiles()
+            if files and (renamed := with_run_suffix(files[0], name_filter)) != files[0]:
+                dialog.selectFile(renamed)
+
+        dialog.filterSelected.connect(follow_file_type)
+        return dialog
+
+    def _ask_run_export_path(self, suggested):
+        dialog = self._run_export_dialog(suggested)
+        try:
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted or not dialog.selectedFiles():
+                return "", ""
+            return dialog.selectedFiles()[0], dialog.selectedNameFilter()
+        finally:
+            dialog.deleteLater()
 
     def import_run(self):
         view, _ = self.service.snapshot()
