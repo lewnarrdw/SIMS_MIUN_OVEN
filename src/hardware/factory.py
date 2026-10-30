@@ -78,7 +78,7 @@ def create_hardware(config):
             name: output(pin, not tower_active_low.get(name, config.RELAY_ACTIVE_LOW))
             for name, pin in config.TOWER_PINS.items()
         }
-        tower = SignalTower(tower_outputs)
+        tower = SignalTower(tower_outputs, config.TOWER_LIGHTS)
         tower.start_refresh()
         return Hardware(
             devices, TemperatureSensor(probe, config.FILTER_WINDOW), probe,

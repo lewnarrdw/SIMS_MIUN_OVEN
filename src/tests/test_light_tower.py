@@ -13,7 +13,8 @@ from PySide6 import QtWidgets
 import application
 import config
 from application import Application
-from hardware.actuators import SignalTower, light_test_steps, tower_lights
+from hardware.actuators import (COMPLETE_SHOW_STEP_S, SignalTower, complete_show_steps, light_test_steps,
+                                tower_lights)
 from main import KilnWindow
 from tests.test_emergency_stop import FakeHardware, FakeOutput, FakeService, wait_for
 
@@ -56,6 +57,86 @@ class LightTestStepsTests(unittest.TestCase):
         for lit_lights, duration_s in light_test_steps(LIGHTS, 0.6):
             self.assertLessEqual(lit_lights, set(LIGHTS))
             self.assertGreater(duration_s, 0.0)
+
+
+class CompleteShowStepsTests(unittest.TestCase):
+    def test_show_ends_on_green_alone(self) -> None:
+        self.assertEqual(complete_show_steps(LIGHTS)[-1][0], {"green"})
+
+    def test_show_lasts_several_seconds(self) -> None:
+        total_s = sum(duration for _, duration in complete_show_steps(LIGHTS))
+
+        self.assertGreater(total_s, 6.0)
+        self.assertLess(total_s, 12.0)
+
+    def test_show_starts_with_a_light_rising_from_the_bottom(self) -> None:
+        steps = complete_show_steps(LIGHTS)
+
+        self.assertEqual([lit for lit, _ in steps[:4]], [{"green"}, {"yellow"}, {"orange"}, {"red"}])
+
+    def test_show_never_switches_faster_than_its_step(self) -> None:
+        for lit_lights, duration_s in complete_show_steps(LIGHTS, 0.12):
+            self.assertLessEqual(lit_lights, set(LIGHTS))
+            self.assertGreaterEqual(duration_s, 0.12 - 1e-9)
+
+
+class SignalTowerCompleteShowTests(unittest.TestCase):
+    def complete(self, now: float = 100.0) -> SignalTower:
+        tower = make_tower("cooling")
+        tower.update(now)
+        tower.show("complete")
+        tower.update(now)
+        return tower
+
+    def test_completing_a_run_plays_the_show(self) -> None:
+        tower = self.complete()
+
+        self.assertEqual(lit(tower) - {"buzzer"}, {"green"})  # The first rocket leaves the bottom
+        tower.update(100.0 + COMPLETE_SHOW_STEP_S * 1.5)
+        self.assertEqual(lit(tower) - {"buzzer"}, {"yellow"})
+
+    def test_show_settles_on_steady_green(self) -> None:
+        tower = self.complete()
+        end = 100.0 + sum(duration for _, duration in complete_show_steps(LIGHTS))
+
+        for now in (end, end + 0.3, end + 0.6, end + 0.9):
+            tower.update(now)
+            self.assertEqual(lit(tower), {"green"})
+
+    def test_show_plays_once(self) -> None:
+        tower = self.complete()
+        tower.update(200.0)
+
+        tower.show("complete")
+        tower.update(200.01)
+
+        self.assertEqual(lit(tower), {"green"})
+
+    def test_leaving_complete_ends_the_show(self) -> None:
+        tower = self.complete()
+
+        tower.show("ready")
+        tower.update(100.5)
+
+        self.assertEqual(lit(tower), {"green"})
+
+    def test_an_alarm_ends_the_show_at_once(self) -> None:
+        tower = self.complete()
+
+        tower.show("e_stop")
+
+        self.assertEqual(lit(tower), {"red"})
+
+    def test_a_moving_door_ends_the_show(self) -> None:
+        tower = self.complete()
+
+        tower.set_conditions(door_moving=True, hot=False)
+        tower.update(100.01)
+
+        self.assertEqual(lit(tower) - {"buzzer"}, {"yellow"})
+        tower.set_conditions(door_moving=False, hot=False)
+        tower.update(101.0)
+        self.assertEqual(lit(tower), {"green"})
 
 
 class SignalTowerLightTestTests(unittest.TestCase):
@@ -136,13 +217,28 @@ class TowerLightSchemeTests(unittest.TestCase):
 
     def test_run_blinks_green_at_one_hertz(self) -> None:
         for state in ("door_moving", "heating", "holding", "cooling"):
-            self.assertEqual(tower_lights(state, 10.2), {"green"})
-            self.assertEqual(tower_lights(state, 10.7), set())
+            self.assertIn("green", tower_lights(state, 10.2))
+            self.assertNotIn("green", tower_lights(state, 10.7))
 
-    def test_completed_run_blinks_green_at_two_hertz(self) -> None:
-        self.assertEqual(tower_lights("complete", 10.1), {"green"})
-        self.assertEqual(tower_lights("complete", 10.3), set())
-        self.assertEqual(tower_lights("complete", 10.6), {"green"})
+    def test_warming_up_blinks_orange_with_green(self) -> None:
+        for hot in (False, True):
+            self.assertEqual(tower_lights("heating", 10.2, hot=hot), {"orange", "green"})
+            self.assertEqual(tower_lights("heating", 10.7, hot=hot), set())
+
+    def test_holding_shows_steady_orange(self) -> None:
+        for now in (10.2, 10.7):
+            self.assertIn("orange", tower_lights("holding", now))
+
+    def test_cooling_turns_orange_off_even_when_hot(self) -> None:
+        for now in (10.2, 10.7):
+            self.assertNotIn("orange", tower_lights("cooling", now, hot=True))
+
+    def test_closing_the_door_before_a_run_shows_no_orange(self) -> None:
+        self.assertNotIn("orange", tower_lights("door_moving", 10.2, hot=True))
+
+    def test_completed_run_shows_steady_green(self) -> None:
+        for now in (10.1, 10.3, 10.6, 10.9):
+            self.assertEqual(tower_lights("complete", now), {"green"})
 
     def test_estop_shows_steady_red_without_green(self) -> None:
         for now in (0.0, 0.7):
@@ -175,8 +271,8 @@ class TowerLightSchemeTests(unittest.TestCase):
     def test_lights_return_once_the_door_stops(self) -> None:
         self.assertEqual(tower_lights("ready", 0.2, door_moving=False, hot=True), {"green", "orange"})
 
-    def test_hot_oven_shows_steady_orange_in_every_state(self) -> None:
-        for state in ("ready", "heating", "complete", "aborted", "fault", "e_stop"):
+    def test_hot_oven_shows_steady_orange_outside_a_run(self) -> None:
+        for state in ("ready", "complete", "aborted", "fault", "e_stop"):
             for now in (0.1, 0.6, 0.9):
                 self.assertIn("orange", tower_lights(state, now, hot=True))
         self.assertNotIn("orange", tower_lights("ready", 0.0, hot=False))

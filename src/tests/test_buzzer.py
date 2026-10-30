@@ -46,10 +46,10 @@ class SignalTowerBuzzerTests(unittest.TestCase):
 
         tower.show("heating")
 
-        # Green blinks during a run and is in the on half of its blink at whole seconds.
-        self.assertEqual(lit(tower), {"green", "buzzer"})
+        # Green and orange blink while warming up and are in the on half of their blink at whole seconds.
+        self.assertEqual(lit(tower), {"green", "orange", "buzzer"})
         tower.update(1.0)
-        self.assertEqual(lit(tower), {"green"})
+        self.assertEqual(lit(tower), {"green", "orange"})
 
     def test_e_stop_silences_buzzer_even_during_buzzer_test(self) -> None:
         tower = make_tower()
