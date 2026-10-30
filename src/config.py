@@ -66,20 +66,26 @@ SENSOR_FAULT_TIMEOUT_S = 2.0
 HEATING_CHECK_OUTPUT_PERCENT = 80.0
 HEATING_CHECK_WINDOW_S = 120.0
 HEATING_CHECK_MIN_RISE_C = 1.0
-# PID tuned 2026-10-26 from kiln-run-20261023-135828: the oven fits a first-order lag
-# with dead time (gain 0.47 °C per % output, time constant 945 s, dead time 17 s;
-# 0.21 °C RMS fit over the 35-minute run). The gains (Ti = 180 s, Td = 20 s) came from
-# a closed-loop search on that model, checked against gain and time constant ±30 %,
-# twice the dead time and rooms of 18.5-22.5 °C.
-PID_KP = 33.0
-PID_KI = 0.183
-PID_KD = 660.0
+# PI retuned 2026-10-30 (D off: it mostly amplified the sensor's 0.034 °C steps, swinging
+# the heater 8-41 % while holding). Closed-loop search with the real PID and hold rules
+# on three oven models (gain 0.39 °C/%, time constant 636 s, heater lag 30 s, dead time
+# 18 s from kiln-run-20261026-123831; 0.47 °C/%, 945 s, dead 17 s from the earlier fit;
+# and a refit of kiln-run-20261023-135828), rooms of 18.5-24 °C, cold and warm starts,
+# targets 30-45 °C, readings rounded to the sensor's step. The first model reproduces
+# good_test (2026-10-30) with a room of about 23.5 °C. Ti = 211 s.
+PID_KP = 19.0
+PID_KI = 0.09
+PID_KD = 0.0
 # The integral only accumulates within this many °C of the target. Integrating during
 # the heat-up stores error that carries the oven past the target.
 PID_INTEGRAL_ZONE_C = 1.0
-ROOM_TEMPERATURE = 20.0
-# Steady output per °C above room temperature: 1 / 0.47 °C per % from the fit above.
-FF_PERCENT_PER_DEGREE = 2.1
+# Room the feed-forward assumes: between the lab (about 20 °C) and the warmer room of
+# good_test (about 23.5 °C). Too high only leaves the integral a little more to do;
+# too low adds heat the oven can only lose slowly, so the guess leans warm.
+ROOM_TEMPERATURE = 22.0
+# Steady output per °C above room temperature. Holding 30 °C in a 20.1 °C room took
+# 24 % on average in kiln-run-20261026-123831, i.e. 2.4 %/°C.
+FF_PERCENT_PER_DEGREE = 2.4
 # Next to the program, not wherever it was started from (e.g. ~ when launched from a shortcut).
 DATA_DIRECTORY = str(Path(__file__).resolve().parent / "data")
 # Minimise button: None shows it only when a desktop session (with a taskbar) can

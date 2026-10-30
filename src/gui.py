@@ -1495,6 +1495,9 @@ class OvenWindow(QtWidgets.QMainWindow):
         self.hold_input.setValue(DEFAULT_HOLD_DURATION_S)
         self.hold_input.setFixedSize(120, 40)
 
+        # Muted "min–max" beside each input, keyed by the input.
+        self.range_hints: dict[QtWidgets.QAbstractSpinBox, QtWidgets.QLabel] = {}
+
         def add_process_field(label_text: str, control: QtWidgets.QWidget) -> None:
             field = QtWidgets.QHBoxLayout()
             field.setContentsMargins(0, 0, 0, 0)
@@ -1504,6 +1507,7 @@ class OvenWindow(QtWidgets.QMainWindow):
             control.setFixedWidth(120)
             field.addWidget(label)
             field.addStretch(1)
+            field.addWidget(self._range_hint(control))
             field.addWidget(control)
             controls.addLayout(field)
 
@@ -1546,13 +1550,15 @@ class OvenWindow(QtWidgets.QMainWindow):
         )
         for checkbox, value_input in self.pid_enable_inputs:
             checkbox.toggled.connect(value_input.setEnabled)
+            # A term whose default gain is 0 (D) starts switched off.
+            checkbox.setChecked(value_input.value() != 0.0)
         self.pid_controls = QtWidgets.QWidget()
         pid_controls_layout = QtWidgets.QVBoxLayout(self.pid_controls)
         pid_controls_layout.setContentsMargins(0, 0, 0, 0)
         pid_controls_layout.setSpacing(6)
-        pid_controls_layout.addWidget(self._pid_control_row(self.kp_enable, self.kp_input))
-        pid_controls_layout.addWidget(self._pid_control_row(self.ki_enable, self.ki_input))
-        pid_controls_layout.addWidget(self._pid_control_row(self.kd_enable, self.kd_input))
+        for checkbox, value_input in self.pid_enable_inputs:
+            pid_controls_layout.addWidget(
+                self._pid_control_row(checkbox, self._range_hint(value_input), value_input))
         self.pid_changes_note = QtWidgets.QLabel("Changes apply immediately")
         self.pid_changes_note.setStyleSheet(
             "color: #9aa1ab; font-family: 'IBM Plex Sans'; font-size: 9pt;"
@@ -1626,14 +1632,28 @@ class OvenWindow(QtWidgets.QMainWindow):
         checkbox.setToolTip(tooltip)
         return checkbox
 
+    def _range_hint(self, control: QtWidgets.QDoubleSpinBox) -> QtWidgets.QLabel:
+        """A muted "min–max" label for an input, written the way the input shows values."""
+        if isinstance(control, DurationSpinBox):
+            low, high = control.textFromValue(control.minimum()), control.textFromValue(control.maximum())
+        else:
+            low, high = f"{control.minimum():g}", f"{control.maximum():g}"
+        hint = QtWidgets.QLabel(f"{low}–{high}")
+        hint.setStyleSheet("color: #7d848e; font-size: 9pt;")
+        hint.setToolTip(f"Allowed range: {low} to {high}")
+        self.range_hints[control] = hint
+        return hint
+
     @staticmethod
-    def _pid_control_row(checkbox: QtWidgets.QCheckBox, value_input: QtWidgets.QDoubleSpinBox) -> QtWidgets.QWidget:
+    def _pid_control_row(checkbox: QtWidgets.QCheckBox, range_hint: QtWidgets.QLabel,
+                         value_input: QtWidgets.QDoubleSpinBox) -> QtWidgets.QWidget:
         row = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         layout.addWidget(checkbox)
         layout.addStretch(1)
+        layout.addWidget(range_hint)
         layout.addWidget(value_input)
         return row
 

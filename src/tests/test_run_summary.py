@@ -15,7 +15,7 @@ from PySide6 import QtCore, QtWidgets
 from data_manager import DataManager
 from main import KilnWindow
 from run_summary import attach_summary, format_duration, record_summary, summarize, summary_text
-from run_summary_dialog import RunSummaryDialog
+from run_summary_dialog import RunSummaryDialog, gain_subscripts_html
 from tests.test_toolbar_availability import SampleService
 
 TARGET = 30.0
@@ -176,6 +176,27 @@ class SummaryDialogTests(unittest.TestCase):
 
         self.assertIn("Peak error: +0.05 °C", QtWidgets.QApplication.clipboard().text())
         dialog.deleteLater()
+
+    def test_gains_are_shown_with_subscripts(self) -> None:
+        dialog = RunSummaryDialog(summarize(completed_record(), 0.1), live=False)
+        row = next(row for row in range(dialog.table.rowCount())
+                   if dialog.table.item(row, 0).text() == "PID gains")
+
+        cell = dialog.table.cellWidget(row, 1)
+
+        self.assertIsInstance(cell, QtWidgets.QLabel)
+        for name in "pid":
+            self.assertIn(f"K<sub>{name}</sub>", cell.text())
+        self.assertEqual(dialog.table.item(row, 1).text(), "")  # No plain text under the label
+        dialog.copy_to_clipboard()
+        self.assertIn("PID gains: Kp ", QtWidgets.QApplication.clipboard().text())  # Plain text copies
+        dialog.deleteLater()
+
+    def test_subscripts_apply_only_to_gain_names(self) -> None:
+        self.assertEqual(gain_subscripts_html("Kp 33 · Ki 0.1 · Kd 0"),
+                         "K<sub>p</sub> 33 · K<sub>i</sub> 0.1 · K<sub>d</sub> 0")
+        self.assertIsNone(gain_subscripts_html("Keep 30.0 °C"))
+        self.assertEqual(gain_subscripts_html("Kp <1"), "K<sub>p</sub> &lt;1")
 
 
 class SavedSummaryTests(unittest.TestCase):

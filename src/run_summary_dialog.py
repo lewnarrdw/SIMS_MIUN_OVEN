@@ -1,6 +1,9 @@
 """The run summary window, styled like the event log."""
 from __future__ import annotations
 
+import html
+import re
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from run_summary import Metric, summary_text
@@ -8,6 +11,14 @@ from run_summary import Metric, summary_text
 VALUE_COLORS = {"good": "#6fbf98", "warning": "#f4c542", "error": "#ff8a80", None: "#e4e7eb"}
 EMPTY_TITLE = "No run summary yet"
 EMPTY_TEXT = "A summary opens here when a run finishes.\nTo review an earlier run, use File › Import run."
+GAIN_NAME = re.compile(r"\bK([pid])\b")
+
+
+def gain_subscripts_html(text: str) -> str | None:
+    """The text as rich text with Kp, Ki and Kd subscripted; None when it names no gain."""
+    if not GAIN_NAME.search(text):
+        return None
+    return GAIN_NAME.sub(r"K<sub>\1</sub>", html.escape(text))
 
 
 def plain_button(text: str) -> QtWidgets.QPushButton:
@@ -106,6 +117,16 @@ class RunSummaryDialog(QtWidgets.QDialog):
                 item.setToolTip(metric.hint)
             table.setItem(row, 0, label)
             table.setItem(row, 1, value)
+            # A table item cannot show subscripts, so gains get a rich-text label instead.
+            rich = gain_subscripts_html(metric.value)
+            if rich is not None:
+                value.setText("")
+                cell = QtWidgets.QLabel(rich)
+                cell.setTextFormat(QtCore.Qt.TextFormat.RichText)
+                cell.setToolTip(metric.hint)
+                color = VALUE_COLORS.get(metric.level, VALUE_COLORS[None])
+                cell.setStyleSheet(f"color: {color}; background: transparent; padding: 3px 6px 3px 0; font-size: 10pt;")
+                table.setCellWidget(row, 1, cell)
         table.resizeColumnToContents(0)
         table.setColumnWidth(0, table.columnWidth(0) + 24)
         return table
